@@ -1,16 +1,15 @@
-import { db } from './firebase'
-import { doc, setDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore'
+import { pb } from './pocketbase'
 
 const SESSIONS_KEY = 'pausa_rated_sessions'
-const COL = 'ratings'
+const col = () => pb.collection('ratings')
 
 function loadSessions() {
   try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) ?? '{}') } catch { return {} }
 }
 
+// Unique-Index (lobbyId, raterId, targetId) verhindert Doppelbewertungen
 export async function saveRating(lobbyId, raterId, targetId, targetUsername, stars, comment) {
-  const id = `${lobbyId}__${raterId}__${targetId}`
-  await setDoc(doc(db, COL, id), {
+  await col().create({
     lobbyId, raterId, targetId, targetUsername,
     stars, comment: comment?.trim() ?? '',
     at: new Date().toISOString(),
@@ -28,9 +27,9 @@ export function hasRatedSession(lobbyId, raterId) {
 }
 
 export async function getRatingsFor(userId) {
-  const q = query(collection(db, COL), where('targetId', '==', userId))
-  const snap = await getDocs(q)
-  return snap.docs.map(d => d.data())
+  const recs = await col().getFullList({ filter: pb.filter('targetId = {:u}', { u: userId }) })
+  return recs.map(({ lobbyId, raterId, targetId, targetUsername, stars, comment, at }) =>
+    ({ lobbyId, raterId, targetId, targetUsername, stars, comment, at }))
 }
 
 export async function getAverageRating(userId) {

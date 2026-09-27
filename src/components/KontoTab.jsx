@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '../context/AuthContext'
-import { changeEmail, changePassword, deleteAccount, validatePassword, firebaseAuthError } from '../services/authService'
+import { changeEmail, changePassword, deleteAccount, validatePassword, authError } from '../services/authService'
 import { loadProfile, saveProfile } from '../services/profileService'
 import { syncUserDoc } from '../services/userService'
 import { updateUsernameInLobby } from '../services/lobbyService'
@@ -233,10 +233,10 @@ export default function KontoTab() {
     try {
       await changeEmail(newEmail.trim(), currentPassword)
       setShowEmailEdit(false)
-      setEmailMsg('✓ E-Mail aktualisiert.')
-      safeTimeout(() => setEmailMsg(null), 3000)
+      setEmailMsg('✓ Bestätigungslink an die neue E-Mail gesendet.')
+      safeTimeout(() => setEmailMsg(null), 6000)
     } catch (e) {
-      setEmailMsg(firebaseAuthError(e.code) ?? e.message)
+      setEmailMsg(authError(e))
     } finally {
       setEmailLoading(false)
     }
@@ -255,7 +255,7 @@ export default function KontoTab() {
       setPasswordMsg('✓ Passwort geändert.')
       safeTimeout(() => setPasswordMsg(null), 3000)
     } catch (e) {
-      setPasswordMsg(firebaseAuthError(e.code) ?? e.message)
+      setPasswordMsg(authError(e))
     } finally {
       setPasswordLoading(false)
     }
@@ -276,7 +276,7 @@ export default function KontoTab() {
       await deleteAccount(currentPassword)
       await logout()
     } catch (e) {
-      setDeleteMsg(firebaseAuthError(e.code) ?? e.message)
+      setDeleteMsg(authError(e))
       setDeleteLoading(false)
     }
   }

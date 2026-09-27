@@ -1,8 +1,17 @@
-import { db } from './firebase'
-import { collection, doc, setDoc, getDoc, getDocs, onSnapshot, query, where, limit } from 'firebase/firestore'
+import { pb, subscribeList, isNotFound } from './pocketbase'
 import { sanitizeText } from '../utils/sanitize'
 
-const COL = 'users'
+const users = () => pb.collection('users')
+
+function toUserDoc(r) {
+  return {
+    uid:           r.id,
+    username:      r.username,
+    usernameLower: r.usernameLower,
+    socialLinks:   r.socialLinks ?? {},
+    favoriteGames: r.favoriteGames ?? undefined,
+  }
+}
 
 export async function syncUserDoc(uid, username, socialLinks = {}, favoriteGames = null) {
   const clean = sanitizeText(username, 30)
@@ -12,45 +21,38 @@ export async function syncUserDoc(uid, username, socialLinks = {}, favoriteGames
     cleanLinks[platform] = sanitizeText(id ?? '', 30) || null
   }
   const payload = {
-    uid,
     username:      clean,
     usernameLower: clean.toLowerCase(),
     socialLinks:   cleanLinks,
   }
   if (Array.isArray(favoriteGames)) payload.favoriteGames = favoriteGames
-  await setDoc(doc(db, COL, uid), payload, { merge: true })
+  await users().update(uid, payload)
 }
 
 export async function getUserDoc(uid) {
-  const snap = await getDoc(doc(db, COL, uid))
-  return snap.exists() ? snap.data() : null
+  try {
+    return toUserDoc(await users().getOne(uid))
+  } catch (err) {
+    if (isNotFound(err)) return null
+    throw err
+  }
 }
 
-// Subscribes to user docs for a list of UIDs, calls callback with { [uid]: username } map.
-// Returns unsubscribe function.
+// Live-Map { [uid]: username } für eine Liste von UIDs. Gibt unsubscribe zurück.
 export function subscribeUsernames(uids, callback) {
   if (!uids.length) { callback({}); return () => {} }
-  const map = {}
-  const unsubs = uids.map(uid =>
-    onSnapshot(doc(db, COL, uid), snap => {
-      if (snap.exists()) map[uid] = snap.data().username
-      callback({ ...map })
-    })
-  )
-  return () => unsubs.forEach(u => u())
+  const params = Object.fromEntries(uids.map((u, i) => [`u${i}`, u]))
+  const filter = pb.filter(uids.map((_, i) => `id = {:u${i}}`).join(' || '), params)
+  return subscribeList('users', { filter }, recs => {
+    callback(Object.fromEntries(recs.map(r => [r.id, r.username])))
+  })
 }
 
 export async function searchUsers(rawQuery) {
-  const q = sanitizeText(rawQuery, 30).toLowerCase()
+  const q = sanitizeText(rawQuery, 30).toLowerCase().replace(/%/g, '')
   if (q.length < 2) return []
-  const end = q + ''
-  const snap = await getDocs(
-    query(
-      collection(db, COL),
-      where('usernameLower', '>=', q),
-      where('usernameLower', '<=', end),
-      limit(10),
-    )
-  )
-  return snap.docs.map(d => d.data())
+  const res = await users().getList(1, 10, {
+    filter: pb.filter('usernameLower ~ {:q}', { q: `${q}%` }),
+  })
+  return res.items.map(toUserDoc)
 }

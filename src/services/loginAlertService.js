@@ -1,14 +1,11 @@
-import { getFunctions, httpsCallable } from 'firebase/functions'
-import { app } from './firebase'
+import { pb } from './pocketbase'
 import { getLoginLocation } from './locationService'
 
-const functions = getFunctions(app, 'europe-west3')
-
-export async function checkLoginLocation(userId, email) {
+// User-ID + E-Mail ermittelt der Server aus dem Auth-Token
+export async function checkLoginLocation() {
   try {
     const location = await getLoginLocation()
-    const fn       = httpsCallable(functions, 'checkLoginLocation')
-    await fn({ userId, email, ...location })
+    await pb.send('/api/pausa/login-check', { method: 'POST', body: location })
   } catch (err) {
     console.error('[LoginAlert]', err)
   }

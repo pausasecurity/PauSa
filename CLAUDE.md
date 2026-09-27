@@ -18,16 +18,19 @@ Nach jedem abgeschlossenen Schritt die Modul-Roadmap in `CONTEXT.md` aktualisier
   - `/src/components` — Feature-Komponenten
   - `/src/components/shared` — Wiederverwendbare UI-Primitives
   - `/src/hooks` — Custom Hooks
-  - `/src/services` — Daten-Services (Firestore + localStorage)
+  - `/src/services` — Daten-Services (PocketBase + localStorage); `pocketbase.js` = Client + `subscribeList()`
+  - `/pocketbase` — `pb_migrations/` (Schema + Rules), `pb_hooks/` (Routes, Cron); Start: `npm run pb`
   - `/src/context` — React Contexts
   - `/src/data` — Statische Daten & Konstanten (`PLATFORM_META`, `PLATFORM_ICONS`, `TIER_COLORS`)
   - `/src/utils` — Utility-Funktionen (`sanitize.js`)
 - **Stack:** ES6+, React-Hooks, Tailwind CSS
-- **Firestore-Regel:** Nie Firestore direkt in Komponenten — immer über `lobbyService.js`.
-- **DataStore-Prinzip:** `lobbyService.js` ist einziger Transport-Layer → Wechsel auf Supabase/RTDB berührt keine Komponente.
+- **Backend-Regel:** Nie `pb` direkt in Komponenten — immer über die Services in `/src/services`.
+- **DataStore-Prinzip:** Services sind einziger Transport-Layer → Backend-Wechsel berührt keine Komponente.
+- **Schema-Regel:** Collections/Rules nur per neuer Datei in `pocketbase/pb_migrations/` ändern, nie nur im Dashboard.
+- **Hooks:** JSVM-Handler laufen isoliert → Helfer per `require(\`${__hooks}/x.js\`)` *innerhalb* des Handlers.
 
 ## Sicherheit
-- **Sanitization** (vor jedem Firestore-Write):
+- **Sanitization** (vor jedem DB-Write):
   - `sanitizeText(val, maxLen)` — HTML strippen, trim, kürzen
   - `sanitizeUsername(val)` — `[\w\-]`, 3–30 Zeichen
   - `sanitizeClanTag(val)` — alphanumerisch, uppercase, 2–5 Zeichen
@@ -39,7 +42,7 @@ Nach jedem abgeschlossenen Schritt die Modul-Roadmap in `CONTEXT.md` aktualisier
 - `GroupCard`, `FriendRow` → `React.memo`
 - `GroupFeed`, `FriendsList` → `React.useMemo`
 - Cooldown-Ticker: `setInterval` 500ms, per `useEffect`-Cleanup gestoppt.
-- Firestore `onSnapshot` → per `useEffect`-Cleanup getrennt.
+- Realtime-Subscriptions (`subscribeList`) → per `useEffect`-Cleanup getrennt.
 - **TODO (T1):** `MemberRow` in `LobbyDetail` mit `React.memo` wrappen.
 
 ## z-Index-Hierarchie
@@ -59,16 +62,18 @@ Nach jedem abgeschlossenen Schritt die Modul-Roadmap in `CONTEXT.md` aktualisier
 Beitritt → [60s Lock] → Verlassen → [45s Cooldown] → Neuer Beitritt
 ```
 - `LEAVE_BLOCK_MS = 60_000`, `JOIN_BLOCK_MS = 45_000`
-- `_leftAt: Map<userId, timestamp>` — in-memory, kein Firestore
+- `_leftAt: Map<userId, timestamp>` — in-memory, nicht in der DB
 - Mock-Member `joinedAt: 0` → kein Cooldown
 
-## Firestore-Subscription-Architektur
+## Realtime-Architektur (PocketBase)
 ```
-subscribeToLobbies(cb) → onSnapshot(collection) → LfgFeed
-subscribeLobby(id, cb) → onSnapshot(doc)         → LobbyDetail
-seedIfEmpty()          → getDocs → addDoc         → einmalig App-Start
+subscribeToLobbies(cb) → subscribeList('lobbies')                 → LfgFeed
+subscribeLobby(id, cb) → subscribeList('lobbies', id = {:id})     → LobbyDetail
+subscribeChat(id, cb)  → subscribeList('lobby_messages', limit 100)
+seedIfEmpty()          → getList → create (nur eingeloggt)         → einmalig App-Start
+Server-Cron            → löscht abgelaufene Lobbys (+ Messages via cascade)
 ```
-CRUD: `createLobby`, `joinLobby`, `leaveLobby`, `setReady` — alle `async`. Doc-ID = lobbyId (kein `lobbyId`-Feld im Dokument).
+CRUD: `createLobby`, `joinLobby`, `leaveLobby`, `setReady` — alle `async`. Record-ID = lobbyId (kein `lobbyId`-Feld im Record). Filter immer mit `pb.filter('x = {:p}', {p})` bauen (kein String-Concat).
 
 ## Was wir bewusst NICHT übernehmen (OSS-Analyse)
 | Pattern | Warum nicht |

@@ -1,16 +1,26 @@
 ## Projektziel
-Reine Vermittlungs-Plattform (kein Gameserver, kein Matchmaking). Flow: Lobby erstellen → joinen → Lobby-Chat → eigenes Game. Lobbys in Firestore (Echtzeit/cross-device), Profil/Konto in localStorage.
+Reine Vermittlungs-Plattform (kein Gameserver, kein Matchmaking). Flow: Lobby erstellen → joinen → Lobby-Chat → eigenes Game. Backend: PocketBase (Auth + DB + Realtime), Profil/Konto zusätzlich in localStorage.
 
-## Deployment
-- **Live:** `https://pau-sa.web.app` — `npm run build && firebase deploy`
+## Backend (PocketBase v0.40.4)
+- **Lokal:** `npm run pb` → `http://127.0.0.1:8090` (Dashboard `/_/`), Frontend liest `VITE_PB_URL`
+- **Schema:** `pocketbase/pb_migrations/` (versioniert, inkl. Access-Rules) — Änderungen nur per neuer Migration
+- **Hooks:** `pocketbase/pb_hooks/main.pb.js` — `POST /api/pausa/login-check`, Cron `lobbyCleanup` (5 min), `allReadyAt` = Serverzeit
+- **SMTP:** im Dashboard konfigurieren (Settings → Mail) — nötig für Login-Alert, Passwort-Reset, E-Mail-Änderung
+- **Hosting:** Offen (PocketHost / Fly.io / VPS)
+
+## Deployment Frontend
+- **Live:** `https://pau-sa.web.app` — `npm run build && firebase deploy --only hosting`
 - **Backup:** Vercel (`dist/`)
-- **Firestore Rules:** `allow read, write: if true` — TODO nach Firebase-Auth sichern
 
-## Firestore-Collections
-| Collection | Doc-ID | Felder |
+## PocketBase-Collections
+| Collection | Felder | Rules |
 |---|---|---|
-| `lobbies` | lobbyId | game, gameCategory, title, description, maxSlots, requiresMic, language, minRank, platform, members[], createdBy, joinCode, createdAt, expiresAt (TTL 4h) |
-| `lobbies/{id}/messages` | messageId | userId, username, text, at (ISO) |
+| `users` (auth) | email, username, usernameLower, socialLinks{}, favoriteGames[] | list/view: eingeloggt (E-Mail verborgen); update/delete: nur selbst |
+| `lobbies` | game, gameCategory, title, description, maxSlots, requiresMic, language, minRank, platform, region, mode, gender, minAge, members[], createdBy, joinCode, createdAt, expiresAt (TTL 4h), allReadyAt | alles: eingeloggt |
+| `lobby_messages` | lobby (Relation, cascadeDelete), userId, username, text, at | create nur mit eigener userId; unveränderbar |
+| `friendships` | userA < userB (Unique), from, to, fromUsername, toUsername, status | nur Beteiligte; create nur als `from` |
+| `ratings` | lobbyId, raterId, targetId, targetUsername, stars 1–5, comment, at | create nur als `raterId`; Unique pro Tripel; unveränderbar |
+| `loginHistory` | user, ip, city, country, loginAt | nur Server (Hook) |
 
 ## localStorage-Keys
 | Key | Inhalt |
@@ -68,7 +78,7 @@ Zukunft / >120 Jahre / <13 Jahre (DSGVO) → abgelehnt. 29.2. in Nicht-Schaltjah
 Im KontoTab editierbar. Privacy-Shield: IDs nur sichtbar per `socialVisible()` — siehe **Grundsätzliche Regeln**.
 
 ### Freundesystem
-- `friendService.js` — localStorage-CRUD
+- `friendService.js` — PocketBase-Collection `friendships`, Echtzeit
 - Status-Enum: `'pending_sent' | 'pending_received' | 'accepted' | null`
 - Mock-Spieler: `src/data/mockPlayers.js` (u1–u12, 12 Profile mit Tier/Games/Bio)
 - `PlayerProfileCard`: `userId` + `fallbackUsername`; falls `getMockPlayer(userId)` null → Fallback-Objekt aus Lobby-Kontext
@@ -102,26 +112,30 @@ Im KontoTab editierbar. Privacy-Shield: IDs nur sichtbar per `socialVisible()` �
 | 14 | KontoTab | ✅ Fertig | Plattform-IDs, Username, E-Mail-Änderung, Passwort-Änderung (Re-Auth), Sichtbarkeit (3-stufig), Konto löschen |
 | 15 | RatingSystem | ✅ Fertig | ratingService.js (localStorage); RatingModal (1–5 Sterne + Kommentar); Trigger in ReadySystem (alle ready + ≥20 Min; DEV=0ms) |
 | 16 | AgeGating | ✅ Fertig | ageRating in games.js (USK-basiert: 6/12/16/18); LfgFeed filtert automatisch per useVerification().age |
-| 17 | FirebaseAuth | ✅ Fertig | E-Mail/Passwort via Firebase Auth; AuthContext auf onAuthStateChanged; Firestore Rules gesichert (`request.auth != null`); authService.js; Session-Funktionen aus profileService entfernt; `validatePassword()`: 8+ Zeichen, Großbuchstabe, Zahl, Sonderzeichen |
+| 17 | Auth | ✅ Fertig | E-Mail/Passwort via PocketBase Auth (vorher Firebase, → Modul 23); AuthContext auf `pb.authStore.onChange`; authService.js; Session-Funktionen aus profileService entfernt; `validatePassword()`: 8+ Zeichen, Großbuchstabe, Zahl, Sonderzeichen |
 | 18 | JoinCode | ✅ Fertig | 4-stelliger Code per Lobby (Firestore); Copy-Button in LobbyDetail; Code-Eingabe im Feed; `findLobbyByCode` |
 | 19 | ReconnectionWindow | Offen | disconnectedAt in members[]; Cloud Function räumt nach 30s auf |
 | 22 | LobbyAbbruch | Offen | "Lobby beenden"-Button für Host in LobbyDetail; Grund wählbar (Absturz / Lobby-Drop / Sonstiges); löscht Lobby-Doc + Messages-Sub-Collection; Rating-Prompt überspringen wenn Abbruch < 5 Min nach joinedAt |
-| 20 | PresenceReadyState | Offen (nach 17) | isReady → Firebase RTDB Presence; auto-reset bei Browser-Close |
-| 21 | TOTP-2FA | Offen (nach 14) | Authenticator-App (Google Authenticator/Authy); Enrollment in KontoTab (QR-Code + Verify); Challenge-Step im LoginModal nach E-Mail/Passwort; Backup-Codes generieren + anzeigen; `TotpMultiFactorGenerator` aus Firebase Auth |
+| 20 | PresenceReadyState | Offen (nach 17) | isReady → PocketBase Realtime-Presence (SSE-Disconnect); auto-reset bei Browser-Close |
+| 21 | TOTP-2FA | Offen (nach 14) | PocketBase: MFA + OTP nativ (Auth-Collection-Optionen); Enrollment in KontoTab; Challenge-Step im LoginModal |
+| 23 | PocketBaseMigration | ✅ Fertig | Firebase komplett ersetzt (Auth, DB, Functions); Service-Signaturen unverändert; `subscribeList()`-Helper für Realtime; Migration + Hooks versioniert; 25/25 Rule-Tests + Realtime-Test grün |
+| 24 | LobbyServerAuthority | Offen | Lobby-Mutationen (join/leave/kick/ready/dissolve) als PB-Custom-Routes; `lobbies`-updateRule/deleteRule sperren; Cooldowns serverseitig |
+| 25 | PocketBaseHosting | Offen | Deploy-Ziel wählen; SMTP; Backups; `VITE_PB_URL` in Prod setzen |
 
 ## Infrastruktur
 | Bereich | Status | Details |
 |---|---|---|
-| Firebase Firestore | ✅ Live | Collection `lobbies` + Sub-Collection `messages`; Echtzeit; cross-device |
-| Firebase Hosting | ✅ Live | `https://pau-sa.web.app` |
+| PocketBase | 🔧 Lokal | Auth, Collections, Realtime, Hooks, Cron; Hosting offen |
+| Firebase Hosting | ✅ Live | `https://pau-sa.web.app` (nur statisches Frontend) |
 | Vercel | ✅ Backup | Fallback-Deployment |
-| Firestore Rules | ✅ Gesichert | `request.auth != null` für `lobbies` + `lobbies/{id}/messages` |
 
 ## Technische Schulden
 | # | Schuld | Prio |
 |---|---|---|
 | T1 | `MemberRow` in `LobbyDetail` mit `React.memo` | Niedrig |
-| T2 | Firestore-Query `where('expiresAt', '>', now)` statt Collection-Scan | Niedrig |
+| T2 | `getUserLobby` scannt alle Lobbys (members ist JSON) → Member-Relation/Join-Tabelle | Niedrig |
+| T4 | `lobbies` für jeden eingeloggten User beschreibbar (Parität zu alten Firestore-Rules) → Modul 24 | Hoch |
+| T5 | Social-IDs in `users` für alle Eingeloggten lesbar; Privacy-Shield nur clientseitig | Mittel |
 | T3 | `isReady: false` beim Join — Unittest fehlt | Mittel |
 
 ## Behobene Bugs (Referenz)

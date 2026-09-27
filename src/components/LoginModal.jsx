@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useAuth } from '../context/AuthContext'
-import { firebaseAuthError, resetPassword } from '../services/authService'
+import { authError, resetPassword } from '../services/authService'
 import { useTranslation } from 'react-i18next'
 
 const EASE = [0.23, 1, 0.32, 1]
@@ -50,7 +50,7 @@ export default function LoginModal({ onClose, onSuccess, onRegister }) {
       onSuccess?.(user)
       onClose()
     } catch (err) {
-      setError(firebaseAuthError(err.code))
+      setError(authError(err))
     } finally {
       setLoading(false)
     }
@@ -64,7 +64,7 @@ export default function LoginModal({ onClose, onSuccess, onRegister }) {
       await resetPassword(email.trim())
       setResetSent(true)
     } catch (err) {
-      setError(firebaseAuthError(err.code))
+      setError(authError(err))
     } finally {
       setLoading(false)
     }

@@ -3,7 +3,7 @@ import { useCopyToClipboard } from '../hooks/useCopyToClipboard'
 import { useVerification } from '../context/VerificationContext'
 import { useAuth } from '../context/AuthContext'
 import { saveProfile } from '../services/profileService'
-import { registerWithEmail, deleteCurrentUser, firebaseAuthError, validatePassword } from '../services/authService'
+import { registerWithEmail, deleteCurrentUser, authError, validatePassword } from '../services/authService'
 import { calculateAge, validateBirthDate } from '../services/verificationService'
 import { createGroup, generateInviteLink } from '../services/groupService'
 import { GAMES, CATEGORY_ORDER } from '../data/games'
@@ -155,7 +155,7 @@ function StepBasis({ data, onChange, register }) {
     try {
       await register(data.email.trim(), data.password)
     } catch (err) {
-      setErrors(prev => ({ ...prev, email: firebaseAuthError(err.code) }))
+      setErrors(prev => ({ ...prev, email: authError(err) }))
     } finally {
       setChecking(false)
     }
@@ -525,7 +525,7 @@ export default function OnboardingModal({ onComplete }) {
   const [inviteLink, setInviteLink] = useState(null)
   const [finishError, setFinishError] = useState(null)
   const [finishing, setFinishing]   = useState(false)
-  const [firebaseUser, setFirebaseUser] = useState(null)
+  const [authUser, setAuthUser] = useState(null)
 
   const [form, setForm] = useState({
     username:      '',
@@ -550,16 +550,16 @@ export default function OnboardingModal({ onComplete }) {
     setFinishError(null)
     setFinishing(true)
     try {
-      // 1. Firebase-Konto — bereits in Step 0 erstellt, sonst Fallback
+      // 1. Konto — bereits in Step 0 erstellt, sonst Fallback
       let userId
-      if (firebaseUser) {
-        userId = firebaseUser.uid
+      if (authUser) {
+        userId = authUser.uid
       } else {
         const { user } = await registerWithEmail(form.email.trim(), form.password)
         userId = user.uid
       }
 
-      // 2. Profil mit Firebase UID in localStorage speichern (vor loginDirect)
+      // 2. Profil mit User-ID in localStorage speichern (vor loginDirect)
       const cleanSocialLinks = Object.fromEntries(
         Object.entries(form.socialLinks).map(([k, v]) => [k, { id: v.trim() || null }])
       )
@@ -594,7 +594,7 @@ export default function OnboardingModal({ onComplete }) {
       setInviteLink(link)
       setDone(true)
     } catch (err) {
-      setFinishError(firebaseAuthError(err.code))
+      setFinishError(authError(err))
     } finally {
       setFinishing(false)
     }
@@ -648,7 +648,7 @@ export default function OnboardingModal({ onComplete }) {
               onChange={set}
               register={async (email, password) => {
                 const { user } = await registerWithEmail(email, password)
-                setFirebaseUser(user)
+                setAuthUser(user)
                 setStep(1)
               }}
             />
@@ -659,9 +659,9 @@ export default function OnboardingModal({ onComplete }) {
               onChange={set}
               onNext={() => setStep(2)}
               onBack={async () => {
-                if (firebaseUser) {
+                if (authUser) {
                   try { await deleteCurrentUser() } catch {}
-                  setFirebaseUser(null)
+                  setAuthUser(null)
                 }
                 setStep(0)
               }}

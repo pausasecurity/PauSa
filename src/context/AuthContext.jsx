@@ -12,17 +12,17 @@ export function AuthProvider({ children }) {
   const [authReady,   setAuthReady]   = useState(false)
 
   useEffect(() => {
-    return onAuthChange((firebaseUser) => {
-      if (firebaseUser) {
+    return onAuthChange((authUser) => {
+      if (authUser) {
         const profile = loadProfile()
-        const username = profile?.username ?? firebaseUser.email.split('@')[0]
+        const username = profile?.username ?? authUser.email.split('@')[0]
         setCurrentUser({
-          userId:   firebaseUser.uid,
+          userId:   authUser.uid,
           username,
-          email:    firebaseUser.email,
+          email:    authUser.email,
         })
         setIsLoggedIn(true)
-        syncUserDoc(firebaseUser.uid, username, profile?.socialLinks ?? {}, profile?.favoriteGames ?? null).catch(() => {})
+        syncUserDoc(authUser.uid, username, profile?.socialLinks ?? {}, profile?.favoriteGames ?? null).catch(() => {})
       } else {
         setCurrentUser(null)
         setIsLoggedIn(false)
@@ -41,11 +41,11 @@ export function AuthProvider({ children }) {
     }
     setCurrentUser(userData)
     setIsLoggedIn(true)
-    checkLoginLocation(user.uid, user.email) // fire-and-forget
+    checkLoginLocation() // fire-and-forget
     return userData
   }
 
-  // Direkt nach Registrierung – Firebase hat User bereits gesetzt
+  // Direkt nach Registrierung – PocketBase hat User bereits eingeloggt
   const loginDirect = (user) => {
     setCurrentUser({ userId: user.userId, username: user.username, email: user.email ?? '' })
     setIsLoggedIn(true)

@@ -1,33 +1,35 @@
-import { auth } from './firebase'
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged,
-  setPersistence,
-  browserLocalPersistence,
-  browserSessionPersistence,
-  updateEmail,
-  updatePassword,
-  deleteUser,
-  reauthenticateWithCredential,
-  EmailAuthProvider,
-  sendPasswordResetEmail,
-} from 'firebase/auth'
+import { pb, setSessionOnly } from './pocketbase'
 
-export const registerWithEmail = (email, password) =>
-  createUserWithEmailAndPassword(auth, email, password)
+const users  = () => pb.collection('users')
+const toUser = (r) => (r ? { uid: r.id, email: r.email } : null)
 
-export const loginWithEmail = async (email, password, rememberMe = true) => {
-  await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence)
-  return signInWithEmailAndPassword(auth, email, password)
+export async function registerWithEmail(email, password) {
+  await users().create({ email, password, passwordConfirm: password })
+  const { record } = await users().authWithPassword(email, password)
+  return { user: toUser(record) }
 }
 
-export const logoutUser = () => signOut(auth)
+export async function loginWithEmail(email, password, rememberMe = true) {
+  setSessionOnly(!rememberMe)
+  const { record } = await users().authWithPassword(email, password)
+  return { user: toUser(record) }
+}
 
-export const resetPassword = (email) => sendPasswordResetEmail(auth, email)
+export const logoutUser = async () => pb.authStore.clear()
 
-export const onAuthChange = (cb) => onAuthStateChanged(auth, cb)
+export const resetPassword = (email) => users().requestPasswordReset(email)
+
+// cb(user|null) — feuert sofort und danach nur bei Wechsel des eingeloggten Users
+export function onAuthChange(cb) {
+  if (pb.authStore.isValid) users().authRefresh().catch(() => pb.authStore.clear())
+  let lastId
+  return pb.authStore.onChange((_, record) => {
+    const id = record?.id ?? null
+    if (id === lastId) return
+    lastId = id
+    cb(toUser(record))
+  }, true)
+}
 
 // Gibt null zurück wenn ok, sonst Fehlermeldung
 export function validatePassword(pw) {
@@ -39,47 +41,53 @@ export function validatePassword(pw) {
 }
 
 async function reauth(currentPassword) {
-  const user = auth.currentUser
-  if (!user) throw new Error('Nicht eingeloggt.')
-  const credential = EmailAuthProvider.credential(user.email, currentPassword)
-  await reauthenticateWithCredential(user, credential)
+  const rec = pb.authStore.record
+  if (!rec) throw new Error('Nicht eingeloggt.')
+  await users().authWithPassword(rec.email, currentPassword)
+  return rec
 }
 
+// PocketBase ändert die E-Mail erst nach Klick auf den Bestätigungslink
 export async function changeEmail(newEmail, currentPassword) {
   await reauth(currentPassword)
-  await updateEmail(auth.currentUser, newEmail)
+  await users().requestEmailChange(newEmail)
 }
 
 export async function changePassword(newPassword, currentPassword) {
-  await reauth(currentPassword)
-  await updatePassword(auth.currentUser, newPassword)
+  const rec = await reauth(currentPassword)
+  await users().update(rec.id, { oldPassword: currentPassword, password: newPassword, passwordConfirm: newPassword })
+  await users().authWithPassword(rec.email, newPassword)
 }
 
 export async function deleteAccount(currentPassword) {
-  await reauth(currentPassword)
-  await deleteUser(auth.currentUser)
+  const rec = await reauth(currentPassword)
+  await users().delete(rec.id)
+  pb.authStore.clear()
 }
 
 export async function deleteCurrentUser() {
-  if (auth.currentUser) await deleteUser(auth.currentUser)
+  const rec = pb.authStore.record
+  if (!rec) return
+  await users().delete(rec.id)
+  pb.authStore.clear()
 }
 
-export function firebaseAuthError(code) {
-  console.error('[Auth] Firebase error code:', code)
-  const map = {
-    'auth/invalid-credential':        'E-Mail oder Passwort falsch.',
-    'auth/user-not-found':            'Kein Konto mit dieser E-Mail.',
-    'auth/wrong-password':            'Passwort falsch.',
-    'auth/email-already-in-use':      'E-Mail bereits registriert.',
-    'auth/invalid-email':             'Ungültige E-Mail-Adresse.',
-    'auth/weak-password':             'Passwort zu schwach (mind. 6 Zeichen).',
-    'auth/too-many-requests':         'Zu viele Versuche. Bitte warte kurz.',
-    'auth/operation-not-allowed':     'E-Mail/Passwort-Login nicht aktiviert. Bitte Firebase Console prüfen.',
-    'auth/network-request-failed':    'Netzwerkfehler. Bitte Verbindung prüfen.',
-    'auth/configuration-not-found':   'Firebase-Konfiguration ungültig.',
-    'auth/admin-restricted-operation':'Registrierung aktuell nicht erlaubt.',
-    'auth/missing-email':             'E-Mail-Adresse fehlt.',
-    'auth/missing-password':          'Passwort fehlt.',
-  }
-  return map[code] ?? `Anmeldung fehlgeschlagen. (${code ?? 'unbekannt'})`
+export function authError(err) {
+  console.error('[Auth]', err)
+  if (!err)                                  return 'Anmeldung fehlgeschlagen.'
+  if (err.isAbort || err.status === 0)       return 'Netzwerkfehler. Bitte Verbindung prüfen.'
+  if (err.status === 429)                    return 'Zu viele Versuche. Bitte warte kurz.'
+
+  const fields = err.response?.data ?? {}
+  const mail   = fields.email ?? fields.newEmail
+  if (mail)                                  return /unique|taken|exists/i.test(`${mail.code} ${mail.message}`)
+                                                      ? 'E-Mail bereits registriert.'
+                                                      : 'Ungültige E-Mail-Adresse.'
+  if (fields.oldPassword)                    return 'Passwort falsch.'
+  if (fields.password)                       return 'Passwort zu schwach (mind. 8 Zeichen).'
+  if (fields.identity || (err.status === 400 && /authenticate/i.test(err.message ?? '')))
+                                             return 'E-Mail oder Passwort falsch.'
+  if (err.status === 403)                    return 'Aktion nicht erlaubt.'
+  if (err.status === 404)                    return 'Konto nicht gefunden.'
+  return err.message || 'Anmeldung fehlgeschlagen.'
 }

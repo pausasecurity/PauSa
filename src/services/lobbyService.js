@@ -1,8 +1,4 @@
-import { db } from './firebase'
-import {
-  collection, doc, getDocs, getDoc, addDoc, updateDoc, deleteDoc, onSnapshot,
-  query, orderBy, limit, where, serverTimestamp,
-} from 'firebase/firestore'
+import { pb, subscribeList, isNotFound } from './pocketbase'
 import { sanitizeText } from '../utils/sanitize'
 
 export const RANK_OPTIONS = ['Keine', 'Bronze', 'Silber', 'Gold', 'Platin', 'Diamant', 'Radiant']
@@ -14,9 +10,12 @@ export const LANGUAGE_OPTIONS = [
 ]
 
 const COL            = 'lobbies'
+const MSG_COL        = 'lobby_messages'
 const TTL_MS         = 4 * 60 * 60 * 1000
 const LEAVE_BLOCK_MS = 60 * 1000
 const JOIN_BLOCK_MS  = 45 * 1000
+
+const col = () => pb.collection(COL)
 
 // Leave-Cooldown bleibt in-memory (Reset bei Reload ist akzeptabel)
 const _leftAt = new Map() // userId → timestamp (ms)
@@ -64,55 +63,66 @@ function generateJoinCode() {
   return Array.from({ length: 4 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('')
 }
 
-function docToLobby(snap) {
-  const data = snap.data({ serverTimestamps: 'estimate' })
-  const allReadyAt = data.allReadyAt?.toDate?.()?.toISOString() ?? data.allReadyAt ?? null
-  return { ...data, lobbyId: snap.id, allReadyAt }
+function toLobby(r) {
+  const { id, collectionId, collectionName, updated, ...data } = r
+  return {
+    ...data,
+    lobbyId:    id,
+    members:    data.members ?? [],
+    minRank:    data.minRank || null,
+    allReadyAt: data.allReadyAt || null,
+  }
 }
+
+async function fetchLobby(lobbyId) {
+  try {
+    return toLobby(await col().getOne(lobbyId))
+  } catch (err) {
+    if (isNotFound(err)) return null
+    throw err
+  }
+}
+
+const isFresh = (l) => l.expiresAt > new Date().toISOString()
 
 // Seed nur wenn Collection leer (einmaliger Demo-Datensatz)
 export async function seedIfEmpty() {
-  const snap = await getDocs(collection(db, COL))
-  if (!snap.empty) return
+  if (!pb.authStore.isValid) return
+  const res = await col().getList(1, 1, { fields: 'id' })
+  if (res.totalItems) return
   const now = Date.now()
-  await Promise.all(SEED.map((s, i) => addDoc(collection(db, COL), {
+  await Promise.all(SEED.map((s, i) => col().create({
     ...s,
     createdAt: new Date(now - (i + 1) * 5 * 60 * 1000).toISOString(),
     expiresAt: new Date(now + TTL_MS).toISOString(),
   })))
 }
 
-// Echtzeit-Abo für alle Lobbys — gibt unsubscribe zurück
+// Echtzeit-Abo für alle Lobbys — gibt unsubscribe zurück. Abgelaufene löscht der Server-Cron.
 export function subscribeToLobbies(callback) {
-  return onSnapshot(collection(db, COL), snap => {
-    const now = new Date().toISOString()
-    const fresh = snap.docs.map(docToLobby).filter(l => l.expiresAt > now)
-    snap.docs
-      .filter(d => d.data().expiresAt <= now)
-      .forEach(d => deleteDoc(d.ref))
-    callback(fresh)
-  })
+  return subscribeList(COL, {}, recs => callback(recs.map(toLobby).filter(isFresh)))
 }
 
 // Echtzeit-Abo für eine einzelne Lobby — gibt unsubscribe zurück
 export function subscribeLobby(lobbyId, callback) {
-  return onSnapshot(doc(db, COL, lobbyId), snap => {
-    callback(snap.exists() ? docToLobby(snap) : null)
-  })
+  const filter = pb.filter('id = {:id}', { id: lobbyId })
+  return subscribeList(COL, { filter }, recs => callback(recs[0] ? toLobby(recs[0]) : null))
 }
 
 export async function findLobbyByCode(code) {
-  const q = query(collection(db, COL), where('joinCode', '==', code.toUpperCase().trim()))
-  const snap = await getDocs(q)
-  if (snap.empty) return null
-  const lobby = docToLobby(snap.docs[0])
-  return lobby.expiresAt > new Date().toISOString() ? lobby : null
+  try {
+    const rec = await col().getFirstListItem(pb.filter('joinCode = {:c}', { c: code.toUpperCase().trim() }))
+    const lobby = toLobby(rec)
+    return isFresh(lobby) ? lobby : null
+  } catch (err) {
+    if (isNotFound(err)) return null
+    throw err
+  }
 }
 
 export async function getAllLobbies() {
-  const snap = await getDocs(collection(db, COL))
-  const now = new Date().toISOString()
-  return snap.docs.map(docToLobby).filter(l => l.expiresAt > now)
+  const recs = await col().getFullList()
+  return recs.map(toLobby).filter(isFresh)
 }
 
 export function isLobbyFull(lobby) {
@@ -132,7 +142,7 @@ export function joinBlockMs(userId) {
 }
 
 // Gibt verbleibende ms zurück, bis der User seine aktuelle Lobby verlassen darf.
-// Nimmt das Lobby-Objekt direkt entgegen (kein extra Firestore-Read nötig).
+// Nimmt das Lobby-Objekt direkt entgegen (kein extra Read nötig).
 export function leaveBlockMs(lobby, userId) {
   const member = lobby?.members.find(m => m.userId === userId)
   if (!member?.joinedAt) return 0
@@ -169,14 +179,13 @@ export async function createLobby(
     createdAt:    new Date().toISOString(),
     expiresAt:    new Date(Date.now() + TTL_MS).toISOString(),
   }
-  const ref = await addDoc(collection(db, COL), data)
-  return { ...data, lobbyId: ref.id }
+  const rec = await col().create({ ...data, minRank: data.minRank ?? '' })
+  return { ...data, lobbyId: rec.id }
 }
 
 export async function joinLobby(lobbyId, user) {
-  const snap = await getDoc(doc(db, COL, lobbyId))
-  if (!snap.exists())                                          throw new Error('Lobby nicht gefunden.')
-  const lobby = docToLobby(snap)
+  const lobby = await fetchLobby(lobbyId)
+  if (!lobby)                                                  throw new Error('Lobby nicht gefunden.')
   if (isLobbyFull(lobby))                                     throw new Error('Lobby ist voll.')
   if (lobby.members.some(m => m.userId === user.userId))      throw new Error('Bereits in dieser Lobby.')
 
@@ -194,35 +203,31 @@ export async function joinLobby(lobbyId, user) {
     { userId: user.userId, username: user.username, isReady: false, joinedAt: Date.now() },
   ]
   const patch = { members: newMembers }
-  if (lobby.allReadyAt) patch.allReadyAt = null
-  await updateDoc(doc(db, COL, lobbyId), patch)
-  return { ...lobby, ...patch }
+  if (lobby.allReadyAt) patch.allReadyAt = ''
+  return toLobby(await col().update(lobbyId, patch))
 }
 
 export async function dissolveLobby(lobbyId, userId) {
-  const snap = await getDoc(doc(db, COL, lobbyId))
-  if (!snap.exists()) return
-  const lobby = docToLobby(snap)
+  const lobby = await fetchLobby(lobbyId)
+  if (!lobby) return
   if (lobby.createdBy?.userId !== userId) throw new Error('Nur der Host kann die Lobby auflösen.')
-  await deleteDoc(doc(db, COL, lobbyId))
+  await col().delete(lobbyId)
 }
 
 export async function kickMember(lobbyId, hostUserId, targetUserId) {
-  const snap = await getDoc(doc(db, COL, lobbyId))
-  if (!snap.exists()) return
-  const lobby = docToLobby(snap)
+  const lobby = await fetchLobby(lobbyId)
+  if (!lobby) return
   if (lobby.createdBy?.userId !== hostUserId) throw new Error('Nur der Host kann Spieler kicken.')
   if (targetUserId === hostUserId)            throw new Error('Du kannst dich nicht selbst kicken.')
   const remaining = lobby.members.filter(m => m.userId !== targetUserId)
   const patch = { members: remaining }
-  if (lobby.allReadyAt && remaining.some(m => !m.isReady)) patch.allReadyAt = null
-  await updateDoc(doc(db, COL, lobbyId), patch)
+  if (lobby.allReadyAt && remaining.some(m => !m.isReady)) patch.allReadyAt = ''
+  await col().update(lobbyId, patch)
 }
 
 export async function leaveLobby(lobbyId, userId) {
-  const snap = await getDoc(doc(db, COL, lobbyId))
-  if (!snap.exists()) return
-  const lobby = docToLobby(snap)
+  const lobby = await fetchLobby(lobbyId)
+  if (!lobby) return
 
   const block = leaveBlockMs(lobby, userId)
   if (block > 0) {
@@ -234,27 +239,29 @@ export async function leaveLobby(lobbyId, userId) {
 
   const remaining = lobby.members.filter(m => m.userId !== userId)
   if (remaining.length === 0) {
-    await deleteDoc(doc(db, COL, lobbyId))
+    await col().delete(lobbyId)
   } else {
-    await updateDoc(doc(db, COL, lobbyId), { members: remaining })
+    await col().update(lobbyId, { members: remaining })
   }
 }
 
+// Letzte 100 Nachrichten, aufsteigend sortiert
 export function subscribeChat(lobbyId, callback) {
-  const q = query(
-    collection(db, COL, lobbyId, 'messages'),
-    orderBy('at', 'asc'),
-    limit(100),
-  )
-  return onSnapshot(q, snap => {
-    callback(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+  const filter = pb.filter('lobby = {:id}', { id: lobbyId })
+  return subscribeList(MSG_COL, { filter, sort: '-at', limit: 100 }, recs => {
+    callback(
+      recs
+        .map(({ id, userId, username, text, at }) => ({ id, userId, username, text, at }))
+        .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+    )
   })
 }
 
 export async function sendMessage(lobbyId, user, text) {
   const clean = sanitizeText(text, 300)
   if (!clean) return
-  await addDoc(collection(db, COL, lobbyId, 'messages'), {
+  await pb.collection(MSG_COL).create({
+    lobby:    lobbyId,
     userId:   user.userId,
     username: user.username,
     text:     clean,
@@ -270,13 +277,12 @@ export async function updateUsernameInLobby(userId, newUsername) {
   )
   const patch = { members }
   if (lobby.createdBy?.userId === userId) patch.createdBy = { ...lobby.createdBy, username: newUsername }
-  await updateDoc(doc(db, COL, lobby.lobbyId), patch)
+  await col().update(lobby.lobbyId, patch)
 }
 
 export async function setReady(lobbyId, userId, isReady) {
-  const snap = await getDoc(doc(db, COL, lobbyId))
-  if (!snap.exists()) return null
-  const lobby = docToLobby(snap)
+  const lobby = await fetchLobby(lobbyId)
+  if (!lobby) return null
 
   // Kein un-ready mehr sobald der Game-Timer gestartet ist
   if (!isReady && lobby.allReadyAt) return lobby
@@ -286,11 +292,11 @@ export async function setReady(lobbyId, userId, isReady) {
   const allReady = members.length >= 2 && members.every(m => m.isReady)
   const patch = { members }
   if (allReady && !lobby.allReadyAt) {
-    patch.allReadyAt = serverTimestamp()
+    patch.allReadyAt = new Date().toISOString() // Server-Hook überschreibt mit Serverzeit
   } else if (!allReady && lobby.allReadyAt) {
-    patch.allReadyAt = null
+    patch.allReadyAt = ''
   }
 
-  await updateDoc(doc(db, COL, lobbyId), patch)
-  return { ...lobby, ...patch }
+  const rec = await col().update(lobbyId, patch)
+  return toLobby(rec)
 }

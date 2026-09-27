@@ -1,0 +1,53 @@
+# Baut PauSa bei jedem Push auf main, prüft die DB-Regeln und lädt dist/ per FTPS zu Hetzner hoch.
+# Hochgeladen wird erst, wenn die Repo-Variable DEPLOY_ENABLED = true ist (Settings → Secrets and variables → Actions).
+#
+# Variables (öffentlich): DEPLOY_ENABLED, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, FTP_SERVER_DIR (optional)
+# Secrets (geheim):       FTP_SERVER, FTP_USERNAME, FTP_PASSWORD
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: DB-Regeln testen (RLS + RPCs)
+        run: npm run test:db
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Deploy zu Hetzner (FTPS)
+        if: vars.DEPLOY_ENABLED == 'true'
+        uses: SamKirkland/FTP-Deploy-Action@110f9186c050f71550953127052e77650219c287 # v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftps
+          local-dir: ./dist/
+          server-dir: ${{ vars.FTP_SERVER_DIR || './public_html/' }}

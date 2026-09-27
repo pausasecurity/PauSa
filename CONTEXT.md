@@ -10,8 +10,10 @@ Reine Vermittlungs-Plattform (kein Gameserver, kein Matchmaking). Flow: Lobby er
 - **Free-Tier:** pausiert nach 7 Tagen Inaktivität, keine Backups → vor Launch Pro oder Backups
 
 ## Deployment Frontend
-- **Live:** `https://pau-sa.web.app` — `npm run build && firebase deploy --only hosting` (Env-Variablen müssen beim Build gesetzt sein)
-- **Backup:** Vercel (`dist/`)
+- **Ziel:** Hetzner Webhosting (DE) — Deploy automatisch per GitHub Action `.github/workflows/deploy.yml` bei Push auf main (test:db → build → FTPS nach `public_html/`); aktiv erst mit Repo-Variable `DEPLOY_ENABLED=true`
+- **GitHub Variables:** `DEPLOY_ENABLED`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, optional `FTP_SERVER_DIR` · **Secrets:** `FTP_SERVER`, `FTP_USERNAME`, `FTP_PASSWORD`
+- **`public/.htaccess`:** HTTPS-Redirect, SPA-Fallback, Security-Header inkl. CSP (Supabase-URL darin hart hinterlegt!), Caching
+- **Alt (abschalten nach Hetzner-Go-live):** `pau-sa.web.app` (Firebase Hosting, alte Firestore-Version) · Vercel
 
 ## Supabase-Tabellen
 | Tabelle | Inhalt | Zugriff |
@@ -123,7 +125,8 @@ Im KontoTab editierbar. Privacy-Shield: IDs nur sichtbar per `socialVisible()` �
 | 21 | TOTP-2FA | Offen (nach 14) | Supabase Auth MFA (TOTP ist im Projekt bereits aktiviert); Enrollment in KontoTab; Challenge-Step im LoginModal |
 | 23 | PocketBaseMigration | ⛔ Verworfen | Referenz-Commit `7f8ae17`; ersetzt durch Supabase (kostenlos, kein Serverbetrieb nötig) |
 | 24 | LobbyServerAuthority | ✅ Fertig (SQL) | RPCs `create_lobby/join_lobby/leave_lobby/kick_member/set_ready/dissolve_lobby` mit Row-Locks; Cooldowns serverseitig (`profiles.left_lobby_at`); Host-Übergabe beim Verlassen; direkte Writes auf `lobbies`/`lobby_members` gesperrt |
-| 26 | SupabaseMigration | 🔧 In Arbeit | ✅ Schema/RLS/RPCs/Realtime/pg_cron live · ✅ `npm run test:db` (70 Tests) · ✅ Services auf supabase-js (`liveQuery`, Lobby nur per RPC) · ✅ Onboarding: Konto erst am Ende, Profil per Signup-Metadaten, E-Mail-Bestätigung · ✅ `PasswordResetModal` · ✅ PocketBase, ipapi.co, loginAlert/locationService entfernt · Offen: Browser-Test mit echtem Konto, Login-Alert neu (Edge Function, braucht SMTP), Google Fonts lokal |
+| 26 | SupabaseMigration | 🔧 In Arbeit | ✅ Schema/RLS/RPCs/Realtime/pg_cron live · ✅ `npm run test:db` (70 Tests) · ✅ Services auf supabase-js (`liveQuery`, Lobby nur per RPC) · ✅ Onboarding: Konto erst am Ende, Profil per Signup-Metadaten, E-Mail-Bestätigung · ✅ `PasswordResetModal` · ✅ PocketBase, ipapi.co, loginAlert/locationService entfernt · ✅ Google Fonts lokal (@fontsource) · Offen: Login-Alert neu (Edge Function, braucht SMTP) |
+| 28 | Hosting Hetzner Webhosting | 🔧 In Arbeit | ✅ GitHub Action + `.htaccess` vorbereitet · Entscheidung: Frontend auf Hetzner Webhosting (DE), kein eigener Server; Firebase Hosting + Vercel fallen weg. Konto angelegt, wartet auf Ausweis-Verifizierung → dann Tarif + Domain, AVV, Deploy per GitHub Action, `.htaccess` (SPA-Rewrite + HTTPS), Domain in Supabase-Redirects |
 | 27 | EU-SMTP | Offen | Brevo/Mailjet als Custom SMTP in Supabase (Bestätigung, Reset, Login-Alert) |
 
 ## Infrastruktur

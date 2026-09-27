@@ -118,9 +118,10 @@ Im KontoTab editierbar. Privacy-Shield: IDs nur sichtbar per `socialVisible()` �
 | 22 | LobbyAbbruch | Offen | "Lobby beenden"-Button für Host in LobbyDetail; Grund wählbar (Absturz / Lobby-Drop / Sonstiges); löscht Lobby-Doc + Messages-Sub-Collection; Rating-Prompt überspringen wenn Abbruch < 5 Min nach joinedAt |
 | 20 | PresenceReadyState | Offen (nach 17) | isReady → PocketBase Realtime-Presence (SSE-Disconnect); auto-reset bei Browser-Close |
 | 21 | TOTP-2FA | Offen (nach 14) | PocketBase: MFA + OTP nativ (Auth-Collection-Optionen); Enrollment in KontoTab; Challenge-Step im LoginModal |
-| 23 | PocketBaseMigration | ✅ Fertig | Firebase komplett ersetzt (Auth, DB, Functions); Service-Signaturen unverändert; `subscribeList()`-Helper für Realtime; Migration + Hooks versioniert; 25/25 Rule-Tests + Realtime-Test grün |
-| 24 | LobbyServerAuthority | Offen | Lobby-Mutationen (join/leave/kick/ready/dissolve) als PB-Custom-Routes; `lobbies`-updateRule/deleteRule sperren; Cooldowns serverseitig |
-| 25 | PocketBaseHosting | Offen | Deploy-Ziel wählen; SMTP; Backups; `VITE_PB_URL` in Prod setzen |
+| 23 | PocketBaseMigration | ⛔ Verworfen | Referenz-Commit `7f8ae17`; ersetzt durch Supabase (kein eigener Server gewünscht) |
+| 24 | LobbyServerAuthority | ✅ Fertig (SQL) | RPCs `create_lobby/join_lobby/leave_lobby/kick_member/set_ready/dissolve_lobby` mit Row-Locks; Cooldowns serverseitig (`profiles.left_lobby_at`); Host-Übergabe beim Verlassen; direkte Writes auf `lobbies`/`lobby_members` gesperrt |
+| 26 | SupabaseMigration | 🔧 In Arbeit | ✅ `supabase/migrations/` (Schema, RLS, RPCs, Demo-Seed, Realtime, pg_cron) + `npm run test:db` (65 Tests, PGlite) · ✅ Projekt `jbsucnkhtwxmohmaxdkc` (eu-west-1 Irland), DPA via AGB gesichert, Migrations + Auth-Config gepusht, anon-Zugriff live geprüft · Offen: Services auf supabase-js, Onboarding mit E-Mail-Bestätigung, Login-Alert als Edge Function, Google Fonts lokal, ipapi.co entfernen, PocketBase-Reste löschen |
+| 27 | EU-SMTP | Offen | Brevo/Mailjet als Custom SMTP in Supabase (Bestätigung, Reset, Login-Alert) |
 
 ## Infrastruktur
 | Bereich | Status | Details |
@@ -134,8 +135,9 @@ Im KontoTab editierbar. Privacy-Shield: IDs nur sichtbar per `socialVisible()` �
 |---|---|---|
 | T1 | `MemberRow` in `LobbyDetail` mit `React.memo` | Niedrig |
 | T2 | `getUserLobby` scannt alle Lobbys (members ist JSON) → Member-Relation/Join-Tabelle | Niedrig |
-| T4 | `lobbies` für jeden eingeloggten User beschreibbar (Parität zu alten Firestore-Rules) → Modul 24 | Hoch |
-| T5 | Social-IDs in `users` für alle Eingeloggten lesbar; Privacy-Shield nur clientseitig | Mittel |
+| T4 | ~~`lobbies` für jeden eingeloggten User beschreibbar~~ → gelöst durch RPCs (Modul 24) | ✅ |
+| T5 | ~~Privacy-Shield nur clientseitig~~ → `profile_socials` + `can_see_socials()` serverseitig | ✅ |
+| T6 | Ratings prüfen nicht, ob Rater und Ziel wirklich in der Lobby waren (Lobby ist danach gelöscht) → Teilnahme-Historie | Mittel |
 | T3 | `isReady: false` beim Join — Unittest fehlt | Mittel |
 
 ## Behobene Bugs (Referenz)

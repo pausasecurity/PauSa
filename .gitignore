@@ -1,0 +1,11 @@
+.vercel
+.firebase
+node_modules
+functions/node_modules
+dist
+.env
+.env.*
+.claude/settings.local.json
+pocketbase/pb_data
+pocketbase/pocketbase.exe
+pocketbase/pocketbase

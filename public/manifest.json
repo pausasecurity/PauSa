@@ -1,0 +1,24 @@
+{
+  "name": "PauSa – LFG Platform",
+  "short_name": "PauSa",
+  "description": "Find your Squad. Dominate the Game.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0F0E17",
+  "theme_color": "#7C3AED",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

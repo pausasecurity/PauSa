@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1A1A2E"/>
+      <stop offset="100%" stop-color="#16213E"/>
+    </linearGradient>
+    <radialGradient id="circle" cx="50%" cy="48%" r="40%">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <!-- Brand circle -->
+  <circle cx="256" cy="256" r="190" fill="url(#circle)"/>
+
+  <!-- PAU (white) -->
+  <text
+    x="148" y="285"
+    font-family="Arial Black, Arial, sans-serif"
+    font-weight="900"
+    font-size="112"
+    fill="#FFFFFF"
+    letter-spacing="2"
+  >PAU</text>
+
+  <!-- SA (accent green) -->
+  <text
+    x="364" y="285"
+    font-family="Arial Black, Arial, sans-serif"
+    font-weight="900"
+    font-size="112"
+    fill="#34D399"
+    letter-spacing="2"
+  >SA</text>
+</svg>

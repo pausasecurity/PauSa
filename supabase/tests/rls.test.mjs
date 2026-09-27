@@ -191,5 +191,23 @@ await as(C, `select delete_own_account()`)
 ok('Account löschen entfernt Profil + Daten',
   (await su(`select (select count(*) from auth.users where id = $1)::int + (select count(*) from profiles where id = $1)::int c`, [C])).rows[0].c === 0)
 
+// ---- Signup-Metadaten ----
+const E = randomUUID()
+await su(`insert into auth.users (id, email, raw_user_meta_data) values ($1, 'e@t.local', $2)`, [E, {
+  username: 'Emma_1',
+  favorite_games: ['valorant', '<b>cs2</b>', 42, ...Array.from({ length: 15 }, (_, i) => `g${i}`)],
+  social_links: { steam: ' emma_steam ', psn: '', hacker: 'x', xbox: { id: 'obj' } },
+}])
+const pe = (await su(`select p.favorite_games, s.links from profiles p join profile_socials s on s.user_id = p.id where p.id = $1`, [E])).rows[0]
+ok('Signup: Spiele bereinigt + max. 10', pe.favorite_games.length === 10 && pe.favorite_games[1] === 'cs2' && !pe.favorite_games.includes(42), JSON.stringify(pe.favorite_games.slice(0, 3)))
+ok('Signup: nur bekannte Plattformen, getrimmt', JSON.stringify(pe.links) === '{"steam":"emma_steam"}', JSON.stringify(pe.links))
+const F2 = randomUUID()
+await su(`insert into auth.users (id, email, raw_user_meta_data) values ($1, 'f@t.local', '{"favorite_games":"kaputt","social_links":[1]}')`, [F2])
+ok('Signup: kaputte Metadaten → Defaults', (await su(`select username from profiles where id = $1`, [F2])).rows[0].username === null)
+
+// ---- friend_count ----
+ok('friend_count für fremdes Profil', (await as(E, `select friend_count($1) c`, [A])).rows[0].c === 1)
+await expectErr('friend_count ohne Login', null, `select friend_count($1)`, [A], /permission denied/)
+
 console.log(fails ? `\n${fails} FEHLER` : '\nALLE TESTS GRÜN')
 process.exit(fails ? 1 : 0)

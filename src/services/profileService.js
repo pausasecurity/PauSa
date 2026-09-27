@@ -1,7 +1,7 @@
 // Profile-Daten in localStorage.
 // Shape: { userId, username, favoriteGames[], socialLinks{}, savedAt }
 // Geburtsdatum liegt in verificationService (pausa_birth_date_locked), nicht hier.
-// Session/Auth wird von PocketBase Auth (authService.js) übernommen.
+// Session/Auth wird von Supabase Auth (authService.js) übernommen.
 
 const PROFILE_KEY = 'pausa_profile'
 

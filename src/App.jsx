@@ -7,6 +7,7 @@ import Navbar from './components/Navbar'
 import LoginModal from './components/LoginModal'
 import Toast from './components/Toast'
 import OnboardingModal from './components/OnboardingModal'
+import EmailConfirmModal from './components/EmailConfirmModal'
 import GroupCard from './components/GroupCard'
 import GroupDetail from './components/GroupDetail'
 import CreateGroupModal from './components/CreateGroupModal'
@@ -550,6 +551,7 @@ function AppShell() {
   const { isLoggedIn, currentUser } = useAuth()
   const [currentView, setCurrentView]       = useState('lobby')
   const [showOnboarding, setShowOnboarding] = useState(false)
+  const [emailConfirm, setEmailConfirm]     = useState(null) // { email, inviteLink } nach Registrierung
   const [showLogin, setShowLogin]           = useState(false)
   const [toast, setToast]                   = useState(null)
   const [filters, setFilters]               = useState(DEFAULT_FILTERS)
@@ -557,7 +559,9 @@ function AppShell() {
   const [activeLobby, setActiveLobby]       = useState(null)
   const [showCreateLobby, setShowCreateLobby] = useState(false)
 
-  React.useEffect(() => { seedIfEmpty() }, [])
+  React.useEffect(() => {
+    if (isLoggedIn) seedIfEmpty().catch(err => console.error('[Seed]', err))
+  }, [isLoggedIn])
 
   const navigate = (view) => {
     setCurrentView(view)
@@ -568,7 +572,10 @@ function AppShell() {
     <div className="min-h-screen bg-bg-950 flex flex-col">
 
       {showOnboarding && (
-        <OnboardingModal onComplete={() => setShowOnboarding(false)} />
+        <OnboardingModal onComplete={(result) => { setShowOnboarding(false); if (result) setEmailConfirm(result) }} />
+      )}
+      {emailConfirm && (
+        <EmailConfirmModal {...emailConfirm} onClose={() => setEmailConfirm(null)} />
       )}
 
       <VerificationBanner />

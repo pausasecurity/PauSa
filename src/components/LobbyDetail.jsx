@@ -208,7 +208,7 @@ export default function LobbyDetail({ lobby: initialLobby, onClose }) {
                   disabled={leaveSecsLeft > 0 || loading}
                   className="px-4 py-2 rounded-lg text-sm font-semibold border transition-colors disabled:border-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed border-red-800/40 text-red-400 hover:border-red-600/60 hover:text-red-300"
                 >
-                  {leaveSecsLeft > 0 ? t('lobby.leaveBlocked', { secs: leaveSecsLeft }) : t('lobby.leave')}
+                  {leaveSecsLeft > 0 ? t('lobby.leaveBlocked', { secs: leaveSecsLeft }) : t('lobby.leaveBtn')}
                 </button>
               )}
               {!isHost && !confirmAction && leaveSecsLeft > 0 && (

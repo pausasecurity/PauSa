@@ -1,9 +1,8 @@
 import React, { useState } from 'react'
-import { useCopyToClipboard } from '../hooks/useCopyToClipboard'
 import { useVerification } from '../context/VerificationContext'
-import { useAuth } from '../context/AuthContext'
 import { saveProfile } from '../services/profileService'
-import { registerWithEmail, deleteCurrentUser, authError, validatePassword } from '../services/authService'
+import { registerWithEmail, authError, validatePassword } from '../services/authService'
+import { usernameAvailable, flattenSocialLinks } from '../services/userService'
 import { calculateAge, validateBirthDate } from '../services/verificationService'
 import { createGroup, generateInviteLink } from '../services/groupService'
 import { GAMES, CATEGORY_ORDER } from '../data/games'
@@ -133,13 +132,14 @@ function Stepper({ step, total }) {
 }
 
 // ---- Schritt 0: Basis-Daten ----
-function StepBasis({ data, onChange, register }) {
+function StepBasis({ data, onChange, onNext }) {
   const [errors, setErrors]     = useState({})
   const [checking, setChecking] = useState(false)
 
   const validate = () => {
     const e = {}
     if (!data.username || data.username.trim().length < 3) e.username = 'Mindestens 3 Zeichen.'
+    else if (sanitizeUsername(data.username) !== data.username.trim()) e.username = 'Nur Buchstaben, Zahlen, _ und -.'
     const birthErr = validateBirthDate(data.birthDate)
     if (birthErr) e.birthDate = birthErr
     if (!data.email || !data.email.includes('@')) e.email = 'Gültige E-Mail erforderlich.'
@@ -153,9 +153,9 @@ function StepBasis({ data, onChange, register }) {
     if (!validate()) return
     setChecking(true)
     try {
-      await register(data.email.trim(), data.password)
+      await onNext()
     } catch (err) {
-      setErrors(prev => ({ ...prev, email: authError(err) }))
+      setErrors(prev => ({ ...prev, [err.field ?? 'email']: err.field ? err.message : authError(err) }))
     } finally {
       setChecking(false)
     }
@@ -168,6 +168,8 @@ function StepBasis({ data, onChange, register }) {
       <div>
         <label className="text-xs text-gray-500 uppercase tracking-widest mb-1 block">Username *</label>
         <input
+          name="nickname"
+          autoComplete="nickname"
           value={data.username}
           onChange={e => onChange('username', e.target.value)}
           placeholder="z.B. ShadowWolf_99"
@@ -242,6 +244,8 @@ function StepBasis({ data, onChange, register }) {
             <label className="text-xs text-gray-500 uppercase tracking-widest mb-1 block">E-Mail *</label>
             <input
               type="email"
+              name="email"
+              autoComplete="username"
               value={data.email}
               onChange={e => onChange('email', e.target.value)}
               placeholder="deine@email.de"
@@ -255,6 +259,8 @@ function StepBasis({ data, onChange, register }) {
             <label className="text-xs text-gray-500 uppercase tracking-widest mb-1 block">Passwort *</label>
             <input
               type="password"
+              name="new-password"
+              autoComplete="new-password"
               value={data.password}
               onChange={e => onChange('password', e.target.value)}
               placeholder="Min. 8 Zeichen, Groß, Zahl, Sonderzeichen"
@@ -452,80 +458,15 @@ function StepClan({ data, onChange, onFinish, onBack, finishing, finishError }) 
   )
 }
 
-// ---- Erfolgs-Screen ----
-function SuccessScreen({ profile, inviteLink, onClose }) {
-  const [copied, copy] = useCopyToClipboard()
-  const age = profile.birthDate ? calculateAge(profile.birthDate) : null
-
-  const copyLink = () => copy(inviteLink)
-
-  return (
-    <div className="text-center space-y-5 py-2">
-      <div className="text-5xl">🎮</div>
-      <div>
-        <p className="text-2xl font-bold text-white">Willkommen, {profile.username}!</p>
-        <p className="text-sm text-gray-400 mt-1">Dein Profil wurde erstellt und lokal gespeichert.</p>
-      </div>
-
-      {/* Zusammenfassung */}
-      <div className="bg-brand-dark/50 border border-purple-900/30 rounded-xl p-4 text-left space-y-2">
-        {profile.favoriteGames?.length > 0 && (
-          <div>
-            <p className="text-xs text-gray-500 mb-1.5">Lieblingsspiele</p>
-            <div className="flex flex-wrap gap-1.5">
-              {profile.favoriteGames.map(id => {
-                const game = GAMES.find(g => g.id === id)
-                return game ? (
-                  <span key={id} className="text-xs bg-purple-900/40 border border-purple-700/40 text-gray-300 px-2 py-0.5 rounded-full">{game.label}</span>
-                ) : null
-              })}
-            </div>
-          </div>
-        )}
-        {age !== null && age >= 16 && (
-          <p className="text-xs text-yellow-400 mt-2">
-            ⚠ Du bist {age} Jahre alt – eine Altersverifizierung wird gleich angefragt.
-          </p>
-        )}
-      </div>
-
-      {/* Clan-Einladungslink */}
-      {inviteLink && (
-        <div className="bg-yellow-900/20 border border-yellow-700/40 rounded-xl p-4 text-left">
-          <p className="text-xs text-yellow-400 font-semibold uppercase tracking-widest mb-2">🔗 Clan-Einladungslink</p>
-          <div className="flex gap-2">
-            <span className="flex-1 font-mono text-xs text-yellow-200 bg-brand-dark rounded-lg px-3 py-2 truncate">{inviteLink}</span>
-            <button
-              onClick={copyLink}
-              className="bg-yellow-600 hover:bg-yellow-500 text-white text-xs font-bold px-3 rounded-lg transition-colors whitespace-nowrap"
-            >
-              {copied ? '✓ Kopiert!' : 'Kopieren'}
-            </button>
-          </div>
-          <p className="text-xs text-yellow-700 mt-2">Teile diesen Link, um Mitglieder direkt einzuladen.</p>
-        </div>
-      )}
-
-      <button onClick={onClose} className="w-full bg-brand-primary hover:bg-purple-500 text-white font-bold py-3 rounded-xl transition-colors">
-        Los geht's! →
-      </button>
-    </div>
-  )
-}
-
 // ============================================================
 // HAUPT-KOMPONENTE
 // ============================================================
 export default function OnboardingModal({ onComplete }) {
   const { submitBirthDate }    = useVerification()
-  const { loginDirect }        = useAuth()
 
   const [step, setStep]             = useState(0)
-  const [done, setDone]             = useState(false)
-  const [inviteLink, setInviteLink] = useState(null)
   const [finishError, setFinishError] = useState(null)
   const [finishing, setFinishing]   = useState(false)
-  const [authUser, setAuthUser] = useState(null)
 
   const [form, setForm] = useState({
     username:      '',
@@ -550,22 +491,23 @@ export default function OnboardingModal({ onComplete }) {
     setFinishError(null)
     setFinishing(true)
     try {
-      // 1. Konto — bereits in Step 0 erstellt, sonst Fallback
-      let userId
-      if (authUser) {
-        userId = authUser.uid
-      } else {
-        const { user } = await registerWithEmail(form.email.trim(), form.password)
-        userId = user.uid
-      }
-
-      // 2. Profil mit User-ID in localStorage speichern (vor loginDirect)
+      // 1. Konto anlegen — Profil, Spiele und Socials legt der DB-Trigger aus den Metadaten an.
+      //    Login erst nach Klick auf den Bestätigungslink.
       const cleanSocialLinks = Object.fromEntries(
         Object.entries(form.socialLinks).map(([k, v]) => [k, { id: v.trim() || null }])
       )
+      const username = sanitizeUsername(form.username)
+      const { user } = await registerWithEmail(form.email.trim(), form.password, {
+        username,
+        favoriteGames: form.favoriteGames,
+        socialLinks:   flattenSocialLinks(cleanSocialLinks),
+      })
+      const userId = user.uid
+
+      // 2. Lokale Profil-Daten (Geburtsdatum, Geschlecht, Region bleiben nur lokal)
       const profile = {
         userId,
-        username:      sanitizeUsername(form.username),
+        username,
         favoriteGames: form.favoriteGames,
         socialLinks:   cleanSocialLinks,
         birthDate:     form.birthDate,
@@ -574,9 +516,8 @@ export default function OnboardingModal({ onComplete }) {
       }
       saveProfile(profile)
 
-      // 3. Geburtsdatum sperren + Auth-State setzen
+      // 3. Geburtsdatum sperren
       submitBirthDate(form.birthDate)
-      loginDirect({ userId, username: profile.username, email: form.email.trim() })
 
       // 4. Clan erstellen (optional)
       let link = null
@@ -591,19 +532,13 @@ export default function OnboardingModal({ onComplete }) {
         } catch { /* Clan-Erstellung optional */ }
       }
 
-      setInviteLink(link)
-      setDone(true)
+      // Pop-up zur E-Mail-Bestätigung zeigt die App (EmailConfirmModal)
+      onComplete?.({ email: form.email.trim(), inviteLink: link })
     } catch (err) {
       setFinishError(authError(err))
     } finally {
       setFinishing(false)
     }
-  }
-
-  const savedProfile = { ...form, birthDate: form.birthDate }
-
-  const handleComplete = () => {
-    onComplete?.()
   }
 
   return (
@@ -612,18 +547,13 @@ export default function OnboardingModal({ onComplete }) {
 
         {/* Header */}
         <div className="px-6 pt-6 pb-4 border-b border-purple-900/30 relative">
-          {!done && (
-            <>
               <p className="text-xs text-brand-accent uppercase tracking-widest font-semibold mb-1">Willkommen bei PauSa</p>
               <p className="text-lg font-bold text-white">Erstelle dein Profil</p>
               <div className="mt-4">
                 <Stepper step={step} total={totalSteps} />
               </div>
-            </>
-          )}
-          {done && <p className="text-lg font-bold text-white">Profil erstellt 🎉</p>}
           <button
-            onClick={onComplete}
+            onClick={() => onComplete?.()}
             aria-label="Schließen"
             style={{
               position: 'absolute', top: 8, right: 12,
@@ -642,32 +572,27 @@ export default function OnboardingModal({ onComplete }) {
         </div>
 
         <div className="px-6 py-5">
-          {!done && step === 0 && (
+          {step === 0 && (
             <StepBasis
               data={form}
               onChange={set}
-              register={async (email, password) => {
-                const { user } = await registerWithEmail(email, password)
-                setAuthUser(user)
+              onNext={async () => {
+                if (!(await usernameAvailable(form.username))) {
+                  throw Object.assign(new Error('Username ist bereits vergeben.'), { field: 'username' })
+                }
                 setStep(1)
               }}
             />
           )}
-          {!done && step === 1 && (
+          {step === 1 && (
             <StepSocial
               data={form}
               onChange={set}
               onNext={() => setStep(2)}
-              onBack={async () => {
-                if (authUser) {
-                  try { await deleteCurrentUser() } catch {}
-                  setAuthUser(null)
-                }
-                setStep(0)
-              }}
+              onBack={() => setStep(0)}
             />
           )}
-          {!done && step === 2 && (
+          {step === 2 && (
             <StepGames
               data={form} onChange={set}
               onNext={() => form.wantsClan ? setStep(3) : finish()}
@@ -676,20 +601,13 @@ export default function OnboardingModal({ onComplete }) {
               finishError={finishError}
             />
           )}
-          {!done && step === 3 && (
+          {step === 3 && (
             <StepClan
               data={form} onChange={set}
               onFinish={finish}
               onBack={() => setStep(2)}
               finishing={finishing}
               finishError={finishError}
-            />
-          )}
-          {done && (
-            <SuccessScreen
-              profile={savedProfile}
-              inviteLink={inviteLink}
-              onClose={handleComplete}
             />
           )}
         </div>

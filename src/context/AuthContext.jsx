@@ -1,28 +1,43 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { loginWithEmail, logoutUser, onAuthChange } from '../services/authService'
-import { loadProfile } from '../services/profileService'
-import { checkLoginLocation } from '../services/loginAlertService'
-import { syncUserDoc } from '../services/userService'
+import { loadProfile, saveProfile } from '../services/profileService'
+import { getUserDoc } from '../services/userService'
+import PasswordResetModal from '../components/PasswordResetModal'
 
 const AuthContext = createContext(null)
+
+// DB ist Quelle für Username/Spiele/Socials; localStorage-Profil wird bei Bedarf befüllt
+// (z.B. nach E-Mail-Bestätigung auf einem anderen Gerät)
+async function resolveUser(authUser) {
+  const local = loadProfile()
+  let doc = null
+  try { doc = await getUserDoc(authUser.uid) } catch (err) { console.error('[Auth] Profil laden', err) }
+
+  const username = doc?.username ?? local?.username ?? authUser.email.split('@')[0]
+
+  if (doc && local?.userId !== authUser.uid) {
+    saveProfile({
+      userId:        authUser.uid,
+      username,
+      favoriteGames: doc.favoriteGames ?? [],
+      socialLinks:   Object.fromEntries(Object.entries(doc.socialLinks ?? {}).map(([k, v]) => [k, { id: v }])),
+    })
+  }
+  return { userId: authUser.uid, username, email: authUser.email }
+}
 
 export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null)
   const [isLoggedIn,  setIsLoggedIn]  = useState(false)
   const [authReady,   setAuthReady]   = useState(false)
+  const [recovery,    setRecovery]    = useState(false)
 
   useEffect(() => {
-    return onAuthChange((authUser) => {
+    return onAuthChange(async (authUser, event) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovery(true)
       if (authUser) {
-        const profile = loadProfile()
-        const username = profile?.username ?? authUser.email.split('@')[0]
-        setCurrentUser({
-          userId:   authUser.uid,
-          username,
-          email:    authUser.email,
-        })
+        setCurrentUser(await resolveUser(authUser))
         setIsLoggedIn(true)
-        syncUserDoc(authUser.uid, username, profile?.socialLinks ?? {}, profile?.favoriteGames ?? null).catch(() => {})
       } else {
         setCurrentUser(null)
         setIsLoggedIn(false)
@@ -33,22 +48,10 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password, rememberMe = true) => {
     const { user } = await loginWithEmail(email, password, rememberMe)
-    const profile  = loadProfile()
-    const userData = {
-      userId:   user.uid,
-      username: profile?.username ?? email.split('@')[0],
-      email:    user.email,
-    }
+    const userData = await resolveUser(user)
     setCurrentUser(userData)
     setIsLoggedIn(true)
-    checkLoginLocation() // fire-and-forget
     return userData
-  }
-
-  // Direkt nach Registrierung – PocketBase hat User bereits eingeloggt
-  const loginDirect = (user) => {
-    setCurrentUser({ userId: user.userId, username: user.username, email: user.email ?? '' })
-    setIsLoggedIn(true)
   }
 
   const updateUsername = (newUsername) => {
@@ -70,8 +73,9 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ isLoggedIn, currentUser, login, loginDirect, logout, updateUsername }}>
+    <AuthContext.Provider value={{ isLoggedIn, currentUser, login, logout, updateUsername }}>
       {children}
+      {recovery && <PasswordResetModal onDone={() => setRecovery(false)} />}
     </AuthContext.Provider>
   )
 }

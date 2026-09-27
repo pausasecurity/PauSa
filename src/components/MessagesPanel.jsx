@@ -298,6 +298,7 @@ function PanelContent({ currentUser }) {
 export default function MessagesPanel({ variant = 'drawer' }) {
   const { t } = useTranslation()
   const { currentUser, isLoggedIn } = useAuth()
+  const [open, setOpen] = useState(false)
 
   if (!isLoggedIn) return null
 
@@ -316,8 +317,6 @@ export default function MessagesPanel({ variant = 'drawer' }) {
   }
 
   // ── Drawer variant (Mobile) ──
-  const [open, setOpen] = useState(false)
-
   const invites     = currentUser ? getPendingInvitesForUser(currentUser.userId) : []
   const unreadCount = invites.length
 

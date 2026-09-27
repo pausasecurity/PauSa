@@ -18,23 +18,25 @@ Nach jedem abgeschlossenen Schritt die Modul-Roadmap in `CONTEXT.md` aktualisier
   - `/src/components` — Feature-Komponenten
   - `/src/components/shared` — Wiederverwendbare UI-Primitives
   - `/src/hooks` — Custom Hooks
-  - `/src/services` — Daten-Services (PocketBase + localStorage); `pocketbase.js` = Client + `subscribeList()`
-  - `/pocketbase` — `pb_migrations/` (Schema + Rules), `pb_hooks/` (Routes, Cron); Start: `npm run pb`
+  - `/src/services` — Daten-Services (Supabase + localStorage); `supabase.js` = Client, `must()`, `liveQuery()`, `isUuid()`
+  - `/supabase/migrations` — Schema, RLS, RPCs (versioniert); `/supabase/tests/rls.test.mjs` → `npm run test:db`
   - `/src/context` — React Contexts
   - `/src/data` — Statische Daten & Konstanten (`PLATFORM_META`, `PLATFORM_ICONS`, `TIER_COLORS`)
   - `/src/utils` — Utility-Funktionen (`sanitize.js`)
 - **Stack:** ES6+, React-Hooks, Tailwind CSS
-- **Backend-Regel:** Nie `pb` direkt in Komponenten — immer über die Services in `/src/services`.
+- **Backend-Regel:** Nie `supabase` direkt in Komponenten — immer über die Services in `/src/services`.
 - **DataStore-Prinzip:** Services sind einziger Transport-Layer → Backend-Wechsel berührt keine Komponente.
-- **Schema-Regel:** Collections/Rules nur per neuer Datei in `pocketbase/pb_migrations/` ändern, nie nur im Dashboard.
-- **Hooks:** JSVM-Handler laufen isoliert → Helfer per `require(\`${__hooks}/x.js\`)` *innerhalb* des Handlers.
+- **Schema-Regel:** Tabellen/Policies/Funktionen nur per neuer Datei in `supabase/migrations/` ändern (nie im Dashboard, nie bestehende Migration editieren). Ablauf: Migration schreiben → `npm run test:db` → `npx supabase db push`.
+- **Lobby-Mutationen:** nur per RPC (`create_lobby`, `join_lobby`, `leave_lobby`, `kick_member`, `set_ready`, `dissolve_lobby`) — direkte Writes auf `lobbies`/`lobby_members` sind per Grant gesperrt.
+- **Neue SECURITY-DEFINER-Funktion:** immer `set search_path = ''`, `revoke execute … from public, anon`, gezielt `grant … to authenticated`.
 
 ## Sicherheit
 - **Sanitization** (vor jedem DB-Write):
   - `sanitizeText(val, maxLen)` — HTML strippen, trim, kürzen
   - `sanitizeUsername(val)` — `[\w\-]`, 3–30 Zeichen
   - `sanitizeClanTag(val)` — alphanumerisch, uppercase, 2–5 Zeichen
-- **Privacy Shield:** Social IDs in `PlayerProfileCard.jsx` nur wenn `isFriend === true` — sonst `🔒`-Placeholder.
+- **Privacy Shield:** serverseitig — `profile_socials` nur lesbar per `can_see_socials()` (eigenes Profil / Freund / gemeinsame Lobby nach `all_ready_at`). UI zeigt sonst `🔒`-Placeholder.
+- **anon sieht nichts:** Alle Tabellen nur für `authenticated`; einzige anon-RPC: `username_available`.
 - **Kein Daten-Export:** `exportData()`/`importData()` entfernt (Sicherheitsrisiko).
 - **Error Boundary:** `ErrorBoundary.jsx` wraps den App-Root.
 
@@ -42,7 +44,7 @@ Nach jedem abgeschlossenen Schritt die Modul-Roadmap in `CONTEXT.md` aktualisier
 - `GroupCard`, `FriendRow` → `React.memo`
 - `GroupFeed`, `FriendsList` → `React.useMemo`
 - Cooldown-Ticker: `setInterval` 500ms, per `useEffect`-Cleanup gestoppt.
-- Realtime-Subscriptions (`subscribeList`) → per `useEffect`-Cleanup getrennt.
+- Realtime-Subscriptions (`liveQuery`) → per `useEffect`-Cleanup getrennt.
 - **TODO (T1):** `MemberRow` in `LobbyDetail` mit `React.memo` wrappen.
 
 ## z-Index-Hierarchie
@@ -53,7 +55,7 @@ Nach jedem abgeschlossenen Schritt die Modul-Roadmap in `CONTEXT.md` aktualisier
 | 60 | MessagesPanel-Button |
 | 90 | GroupDetail / CreateGroupModal |
 | 95 | OnboardingModal, PlayerProfileCard |
-| 98 | LoginModal |
+| 98 | LoginModal, PasswordResetModal, EmailConfirmModal |
 | 100 | VerificationBanner |
 | 200 | Toast |
 
@@ -61,25 +63,25 @@ Nach jedem abgeschlossenen Schritt die Modul-Roadmap in `CONTEXT.md` aktualisier
 ```
 Beitritt → [60s Lock] → Verlassen → [45s Cooldown] → Neuer Beitritt
 ```
-- `LEAVE_BLOCK_MS = 60_000`, `JOIN_BLOCK_MS = 45_000`
-- `_leftAt: Map<userId, timestamp>` — in-memory, nicht in der DB
-- Mock-Member `joinedAt: 0` → kein Cooldown
+- Durchgesetzt serverseitig in `join_lobby`/`leave_lobby` (`profiles.left_lobby_at`, `lobby_members.joined_at`)
+- `LEAVE_BLOCK_MS`/`JOIN_BLOCK_MS` in `lobbyService.js` + `_leftAt` nur für den UI-Countdown
+- Demo-Member `joined_at = epoch` → kein Cooldown
 
-## Realtime-Architektur (PocketBase)
+## Realtime-Architektur (Supabase)
 ```
-subscribeToLobbies(cb) → subscribeList('lobbies')                 → LfgFeed
-subscribeLobby(id, cb) → subscribeList('lobbies', id = {:id})     → LobbyDetail
-subscribeChat(id, cb)  → subscribeList('lobby_messages', limit 100)
-seedIfEmpty()          → getList → create (nur eingeloggt)         → einmalig App-Start
-Server-Cron            → löscht abgelaufene Lobbys (+ Messages via cascade)
+subscribeToLobbies(cb) → liveQuery([lobbies, lobby_members])            → LfgFeed
+subscribeLobby(id, cb) → liveQuery([lobbies, lobby_members]) → fetch id → LobbyDetail
+subscribeChat(id, cb)  → liveQuery([lobby_messages lobby_id=eq.id])     → LobbyChat
+seedIfEmpty()          → rpc('seed_demo_lobbies') (nach Login)
+pg_cron (5 min)        → purge_expired_lobbies() (Members + Messages via cascade)
 ```
-CRUD: `createLobby`, `joinLobby`, `leaveLobby`, `setReady` — alle `async`. Record-ID = lobbyId (kein `lobbyId`-Feld im Record). Filter immer mit `pb.filter('x = {:p}', {p})` bauen (kein String-Concat).
+`liveQuery` = Fetch + Refetch bei jedem postgres_change (debounced). Delete-Events sind nicht filterbar → Tabellen mit relevanten Deletes ohne Filter abonnieren. Lobby-Shape nach außen unverändert (`lobbyId`, `members[]`, `createdBy`, ISO-Timestamps).
 
 ## Was wir bewusst NICHT übernehmen (OSS-Analyse)
 | Pattern | Warum nicht |
 |---|---|
-| Authoritative Server-Logic (Colyseus) | Kein Gameserver — kein Anti-Cheat nötig |
-| Binäre Diffs / MsgPack | Firestore macht Deltas intern |
+| Authoritative Game-Server (Colyseus) | Kein Gameserver — Lobby-Regeln reichen als Postgres-RPCs |
+| Binäre Diffs / MsgPack | Supabase Realtime + Refetch reicht bei unserer Datenmenge |
 | CRDT-Merge (Liveblocks) | Kein simultanes Editieren — jeder toggled nur sein `isReady` |
 | Spectator-Rolle | Nicht im Scope |
 

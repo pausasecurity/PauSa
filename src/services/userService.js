@@ -1,58 +1,83 @@
-import { pb, subscribeList, isNotFound } from './pocketbase'
-import { sanitizeText } from '../utils/sanitize'
+import { supabase, must, isUuid } from './supabase'
+import { sanitizeText, sanitizeUsername } from '../utils/sanitize'
 
-const users = () => pb.collection('users')
+const PLATFORMS = ['steam', 'psn', 'xbox', 'epic', 'nintendo']
 
-function toUserDoc(r) {
-  return {
-    uid:           r.id,
-    username:      r.username,
-    usernameLower: r.usernameLower,
-    socialLinks:   r.socialLinks ?? {},
-    favoriteGames: r.favoriteGames ?? undefined,
+// { steam: { id } | 'id' } → { steam: 'id' } (nur gefüllte, bekannte Plattformen)
+export function flattenSocialLinks(links = {}) {
+  const out = {}
+  for (const p of PLATFORMS) {
+    const raw = links[p]
+    const id  = sanitizeText(typeof raw === 'object' ? raw?.id ?? '' : raw ?? '', 30)
+    if (id) out[p] = id
   }
+  return out
 }
 
-export async function syncUserDoc(uid, username, socialLinks = {}, favoriteGames = null) {
-  const clean = sanitizeText(username, 30)
-  const cleanLinks = {}
-  for (const [platform, val] of Object.entries(socialLinks)) {
-    const id = typeof val === 'object' ? val?.id : val
-    cleanLinks[platform] = sanitizeText(id ?? '', 30) || null
-  }
-  const payload = {
-    username:      clean,
-    usernameLower: clean.toLowerCase(),
-    socialLinks:   cleanLinks,
-  }
-  if (Array.isArray(favoriteGames)) payload.favoriteGames = favoriteGames
-  await users().update(uid, payload)
+function usernameError(err) {
+  if (err.code === '23505') return new Error('Username ist bereits vergeben.')
+  if (err.code === '23514') return new Error('Nur Buchstaben, Zahlen, _ und - (3–30 Zeichen).')
+  return err
 }
 
-export async function getUserDoc(uid) {
+export async function usernameAvailable(name) {
+  return must(await supabase.rpc('username_available', { p_name: sanitizeUsername(name) }))
+}
+
+export async function saveUsername(uid, username) {
   try {
-    return toUserDoc(await users().getOne(uid))
+    must(await supabase.from('profiles').update({ username: sanitizeUsername(username) }).eq('id', uid))
   } catch (err) {
-    if (isNotFound(err)) return null
-    throw err
+    throw usernameError(err)
   }
 }
 
-// Live-Map { [uid]: username } für eine Liste von UIDs. Gibt unsubscribe zurück.
+export async function saveFavoriteGames(uid, favoriteGames) {
+  must(await supabase.from('profiles').update({ favorite_games: favoriteGames.slice(0, 10) }).eq('id', uid))
+}
+
+export async function saveSocialLinks(uid, socialLinks) {
+  must(await supabase.from('profile_socials').update({ links: flattenSocialLinks(socialLinks) }).eq('user_id', uid))
+}
+
+// socialLinks nur befüllt, wenn der Server sie freigibt (eigenes Profil / Freund / gemeinsame Lobby)
+export async function getUserDoc(uid) {
+  if (!isUuid(uid)) return null
+  const row = must(await supabase
+    .from('profiles')
+    .select('id, username, username_lower, favorite_games, profile_socials(links)')
+    .eq('id', uid)
+    .maybeSingle())
+  if (!row) return null
+  return {
+    uid:           row.id,
+    username:      row.username,
+    usernameLower: row.username_lower,
+    favoriteGames: row.favorite_games ?? [],
+    socialLinks:   row.profile_socials?.links ?? {},
+  }
+}
+
+// { [uid]: username } — Usernames ändern sich selten, daher einmaliger Fetch statt Realtime
 export function subscribeUsernames(uids, callback) {
-  if (!uids.length) { callback({}); return () => {} }
-  const params = Object.fromEntries(uids.map((u, i) => [`u${i}`, u]))
-  const filter = pb.filter(uids.map((_, i) => `id = {:u${i}}`).join(' || '), params)
-  return subscribeList('users', { filter }, recs => {
-    callback(Object.fromEntries(recs.map(r => [r.id, r.username])))
+  const ids = uids.filter(isUuid)
+  if (!ids.length) { callback({}); return () => {} }
+  let closed = false
+  supabase.from('profiles').select('id, username').in('id', ids).then(({ data, error }) => {
+    if (error) { console.error('[Supabase]', error); return }
+    if (!closed) callback(Object.fromEntries(data.map(r => [r.id, r.username])))
   })
+  return () => { closed = true }
 }
 
 export async function searchUsers(rawQuery) {
-  const q = sanitizeText(rawQuery, 30).toLowerCase().replace(/%/g, '')
+  const q = sanitizeText(rawQuery, 30).toLowerCase().replace(/[%_\\]/g, '\\$&')
   if (q.length < 2) return []
-  const res = await users().getList(1, 10, {
-    filter: pb.filter('usernameLower ~ {:q}', { q: `${q}%` }),
-  })
-  return res.items.map(toUserDoc)
+  const rows = must(await supabase
+    .from('profiles')
+    .select('id, username')
+    .like('username_lower', `${q}%`)
+    .not('username', 'is', null)
+    .limit(10))
+  return rows.map(r => ({ uid: r.id, username: r.username }))
 }

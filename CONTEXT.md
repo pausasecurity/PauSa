@@ -1,26 +1,29 @@
 ## Projektziel
-Reine Vermittlungs-Plattform (kein Gameserver, kein Matchmaking). Flow: Lobby erstellen → joinen → Lobby-Chat → eigenes Game. Backend: PocketBase (Auth + DB + Realtime), Profil/Konto zusätzlich in localStorage.
+Reine Vermittlungs-Plattform (kein Gameserver, kein Matchmaking). Flow: Lobby erstellen → joinen → Lobby-Chat → eigenes Game. Backend: Supabase (Auth + Postgres + Realtime), Profil/Konto zusätzlich in localStorage.
 
-## Backend (PocketBase v0.40.4)
-- **Lokal:** `npm run pb` → `http://127.0.0.1:8090` (Dashboard `/_/`), Frontend liest `VITE_PB_URL`
-- **Schema:** `pocketbase/pb_migrations/` (versioniert, inkl. Access-Rules) — Änderungen nur per neuer Migration
-- **Hooks:** `pocketbase/pb_hooks/main.pb.js` — `POST /api/pausa/login-check`, Cron `lobbyCleanup` (5 min), `allReadyAt` = Serverzeit
-- **SMTP:** im Dashboard konfigurieren (Settings → Mail) — nötig für Login-Alert, Passwort-Reset, E-Mail-Änderung
-- **Hosting:** Offen (PocketHost / Fly.io / VPS)
+## Backend (Supabase, Free-Tier)
+- **Projekt:** `jbsucnkhtwxmohmaxdkc`, Region eu-west-1 (Irland); DPA gilt über AGB (PDF in `WICHTIGE DOCS/`, nicht im Repo)
+- **Env:** `.env.local` → `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (anon-Key ist öffentlich)
+- **Schema:** `supabase/migrations/` → `npm run test:db` → `npx supabase db push`
+- **Auth:** E-Mail-Bestätigung Pflicht; Passwort 8+ mit Groß/Klein/Zahl/Sonderzeichen (auch serverseitig); Reset-Link → `PasswordResetModal`
+- **Mails:** eingebautes Supabase-SMTP nur an Org-Mitglieder + stark limitiert → EU-SMTP nötig (Modul 27)
+- **Free-Tier:** pausiert nach 7 Tagen Inaktivität, keine Backups → vor Launch Pro oder Backups
 
 ## Deployment Frontend
-- **Live:** `https://pau-sa.web.app` — `npm run build && firebase deploy --only hosting`
+- **Live:** `https://pau-sa.web.app` — `npm run build && firebase deploy --only hosting` (Env-Variablen müssen beim Build gesetzt sein)
 - **Backup:** Vercel (`dist/`)
 
-## PocketBase-Collections
-| Collection | Felder | Rules |
+## Supabase-Tabellen
+| Tabelle | Inhalt | Zugriff |
 |---|---|---|
-| `users` (auth) | email, username, usernameLower, socialLinks{}, favoriteGames[] | list/view: eingeloggt (E-Mail verborgen); update/delete: nur selbst |
-| `lobbies` | game, gameCategory, title, description, maxSlots, requiresMic, language, minRank, platform, region, mode, gender, minAge, members[], createdBy, joinCode, createdAt, expiresAt (TTL 4h), allReadyAt | alles: eingeloggt |
-| `lobby_messages` | lobby (Relation, cascadeDelete), userId, username, text, at | create nur mit eigener userId; unveränderbar |
-| `friendships` | userA < userB (Unique), from, to, fromUsername, toUsername, status | nur Beteiligte; create nur als `from` |
-| `ratings` | lobbyId, raterId, targetId, targetUsername, stars 1–5, comment, at | create nur als `raterId`; Unique pro Tripel; unveränderbar |
-| `loginHistory` | user, ip, city, country, loginAt | nur Server (Hook) |
+| `profiles` | id, username (unique, case-insensitive), favorite_games, is_demo, left_lobby_at | lesen: eingeloggt; ändern: nur eigenes (username, favorite_games) |
+| `profile_socials` | user_id, links {steam, psn, xbox, epic, nintendo} | lesen: `can_see_socials()`; ändern: nur eigene |
+| `lobbies` | Lobby-Felder, host_id, join_code, expires_at (4h), all_ready_at | lesen: eingeloggt + nicht abgelaufen; schreiben: nur RPC |
+| `lobby_members` | lobby_id, user_id (1 Lobby pro User), is_ready, joined_at | lesen: eingeloggt; schreiben: nur RPC |
+| `lobby_messages` | lobby_id, user_id, username (vom Server), text ≤300 | nur Lobby-Mitglieder; unveränderbar |
+| `friendships` | from_id, to_id (Unique-Paar), status | nur Beteiligte; annehmen nur Empfänger |
+| `ratings` | lobby_id, rater_id, target_id, stars 1–5, comment | anlegen nur als rater; unveränderbar |
+| `login_history` | user_id, ip, country, city, user_agent | nur Server (für Login-Alert, noch ungenutzt) |
 
 ## localStorage-Keys
 | Key | Inhalt |
@@ -34,7 +37,7 @@ Reine Vermittlungs-Plattform (kein Gameserver, kein Matchmaking). Flow: Lobby er
 ## Terminologie
 | Begriff | Bedeutung | Sichtbarkeit |
 |---|---|---|
-| **Nickname** | Interner PauSa-Benutzername (`username`-Feld in Firestore/localStorage) | Immer sichtbar — kein Privacy-Shield |
+| **Nickname** | Interner PauSa-Benutzername (`profiles.username` + localStorage) | Immer sichtbar — kein Privacy-Shield |
 | **Username** | Plattformbezogener Name (Steam, PSN, Xbox, Epic, Nintendo) | Privacy-Shield: nur für Freunde / nach `allReadyAt` sichtbar |
 
 > Wenn in Gesprächen oder Tickets von „Nickname" die Rede ist → interner App-Name. „Username" → platform-spezifische Social-ID.
@@ -78,7 +81,7 @@ Zukunft / >120 Jahre / <13 Jahre (DSGVO) → abgelehnt. 29.2. in Nicht-Schaltjah
 Im KontoTab editierbar. Privacy-Shield: IDs nur sichtbar per `socialVisible()` — siehe **Grundsätzliche Regeln**.
 
 ### Freundesystem
-- `friendService.js` — PocketBase-Collection `friendships`, Echtzeit
+- `friendService.js` — Supabase-Tabelle `friendships`, Echtzeit via `liveQuery`
 - Status-Enum: `'pending_sent' | 'pending_received' | 'accepted' | null`
 - Mock-Spieler: `src/data/mockPlayers.js` (u1–u12, 12 Profile mit Tier/Games/Bio)
 - `PlayerProfileCard`: `userId` + `fallbackUsername`; falls `getMockPlayer(userId)` null → Fallback-Objekt aus Lobby-Kontext
@@ -99,11 +102,11 @@ Im KontoTab editierbar. Privacy-Shield: IDs nur sichtbar per `socialVisible()` �
 | 1 | Navbar | ✅ Fertig | Tabs: Lobbys / Gruppen / Mein Profil / Konto; Logo → Startseite |
 | 2 | Hero | ✅ Fertig | Hauptbanner, CTA |
 | 3 | GameFilter | ✅ Fertig | Controlled; Game-Buttons aus Lobby-Daten; Anzahl-Badge |
-| 4 | LfgFeed | ✅ Fertig | Firestore-Echtzeit; klickbare Karten; Age-Gating (16+/18+ per ageRating); alle Filter aktiv |
+| 4 | LfgFeed | ✅ Fertig | Supabase-Echtzeit; klickbare Karten; Age-Gating (16+/18+ per ageRating); alle Filter aktiv |
 | 5 | CreateLobby | ✅ Fertig | Modal; Plattform-Feld (Crossplay/PC/PS/Xbox/Switch); altersgerechter Spiel-Filter via useVerification |
 | 6 | UserProfile | ✅ Fertig | Avatar, Stats, Rang-Badges; Bewertungen-Tab: Durchschnitt + Sterne + Einzelbewertungen via ratingService |
-| 7 | ReadySystem | ✅ Fertig | Ready-Toggle (Firestore); Rating-Prompt wenn alle ready + Session reif |
-| 8 | LobbyDetail | ✅ Fertig | Echtzeit; auto-close bei Löschung; Chat via Firestore Sub-Collection; eigene Nachrichten rechts |
+| 7 | ReadySystem | ✅ Fertig | Ready-Toggle (RPC `set_ready`); Rating-Prompt wenn alle ready + Session reif |
+| 8 | LobbyDetail | ✅ Fertig | Echtzeit; auto-close bei Löschung; Chat via `lobby_messages` (nur Mitglieder); eigene Nachrichten rechts |
 | 9 | MessagesPanel | ✅ Fertig | Drawer, Tabs, Unread-Badge; Lobby-Chat Echtzeit via subscribeChat + sendMessage; async getUserLobby-Bug behoben |
 | 10 | LobbyHoppingGuard | ✅ Fertig | 60s/45s Cooldowns; Live-Countdown |
 | 11 | GroupFeed | ✅ Fertig | Clans; Einladungen-Flow: sendInvite + acceptInvite + declineInvite; InvitePanel in GroupDetail (Admin); MessagesPanel Einladungen-Tab live; GroupCard Invite-Badge |
@@ -112,21 +115,21 @@ Im KontoTab editierbar. Privacy-Shield: IDs nur sichtbar per `socialVisible()` �
 | 14 | KontoTab | ✅ Fertig | Plattform-IDs, Username, E-Mail-Änderung, Passwort-Änderung (Re-Auth), Sichtbarkeit (3-stufig), Konto löschen |
 | 15 | RatingSystem | ✅ Fertig | ratingService.js (localStorage); RatingModal (1–5 Sterne + Kommentar); Trigger in ReadySystem (alle ready + ≥20 Min; DEV=0ms) |
 | 16 | AgeGating | ✅ Fertig | ageRating in games.js (USK-basiert: 6/12/16/18); LfgFeed filtert automatisch per useVerification().age |
-| 17 | Auth | ✅ Fertig | E-Mail/Passwort via PocketBase Auth (vorher Firebase, → Modul 23); AuthContext auf `pb.authStore.onChange`; authService.js; Session-Funktionen aus profileService entfernt; `validatePassword()`: 8+ Zeichen, Großbuchstabe, Zahl, Sonderzeichen |
-| 18 | JoinCode | ✅ Fertig | 4-stelliger Code per Lobby (Firestore); Copy-Button in LobbyDetail; Code-Eingabe im Feed; `findLobbyByCode` |
+| 17 | Auth | ✅ Fertig | E-Mail/Passwort via Supabase Auth mit E-Mail-Bestätigung (vorher Firebase); AuthContext auf `onAuthStateChange`, Username aus DB; authService.js; Session-Funktionen aus profileService entfernt; `validatePassword()`: 8+ Zeichen, Großbuchstabe, Zahl, Sonderzeichen |
+| 18 | JoinCode | ✅ Fertig | 4-stelliger Code per Lobby (serverseitig generiert, unique); Copy-Button in LobbyDetail; Code-Eingabe im Feed; `findLobbyByCode` |
 | 19 | ReconnectionWindow | Offen | disconnectedAt in members[]; Cloud Function räumt nach 30s auf |
 | 22 | LobbyAbbruch | Offen | "Lobby beenden"-Button für Host in LobbyDetail; Grund wählbar (Absturz / Lobby-Drop / Sonstiges); löscht Lobby-Doc + Messages-Sub-Collection; Rating-Prompt überspringen wenn Abbruch < 5 Min nach joinedAt |
-| 20 | PresenceReadyState | Offen (nach 17) | isReady → PocketBase Realtime-Presence (SSE-Disconnect); auto-reset bei Browser-Close |
-| 21 | TOTP-2FA | Offen (nach 14) | PocketBase: MFA + OTP nativ (Auth-Collection-Optionen); Enrollment in KontoTab; Challenge-Step im LoginModal |
-| 23 | PocketBaseMigration | ⛔ Verworfen | Referenz-Commit `7f8ae17`; ersetzt durch Supabase (kein eigener Server gewünscht) |
+| 20 | PresenceReadyState | Offen (nach 17) | isReady → Supabase Realtime Presence; auto-reset bei Browser-Close |
+| 21 | TOTP-2FA | Offen (nach 14) | Supabase Auth MFA (TOTP ist im Projekt bereits aktiviert); Enrollment in KontoTab; Challenge-Step im LoginModal |
+| 23 | PocketBaseMigration | ⛔ Verworfen | Referenz-Commit `7f8ae17`; ersetzt durch Supabase (kostenlos, kein Serverbetrieb nötig) |
 | 24 | LobbyServerAuthority | ✅ Fertig (SQL) | RPCs `create_lobby/join_lobby/leave_lobby/kick_member/set_ready/dissolve_lobby` mit Row-Locks; Cooldowns serverseitig (`profiles.left_lobby_at`); Host-Übergabe beim Verlassen; direkte Writes auf `lobbies`/`lobby_members` gesperrt |
-| 26 | SupabaseMigration | 🔧 In Arbeit | ✅ `supabase/migrations/` (Schema, RLS, RPCs, Demo-Seed, Realtime, pg_cron) + `npm run test:db` (65 Tests, PGlite) · ✅ Projekt `jbsucnkhtwxmohmaxdkc` (eu-west-1 Irland), DPA via AGB gesichert, Migrations + Auth-Config gepusht, anon-Zugriff live geprüft · Offen: Services auf supabase-js, Onboarding mit E-Mail-Bestätigung, Login-Alert als Edge Function, Google Fonts lokal, ipapi.co entfernen, PocketBase-Reste löschen |
+| 26 | SupabaseMigration | 🔧 In Arbeit | ✅ Schema/RLS/RPCs/Realtime/pg_cron live · ✅ `npm run test:db` (70 Tests) · ✅ Services auf supabase-js (`liveQuery`, Lobby nur per RPC) · ✅ Onboarding: Konto erst am Ende, Profil per Signup-Metadaten, E-Mail-Bestätigung · ✅ `PasswordResetModal` · ✅ PocketBase, ipapi.co, loginAlert/locationService entfernt · Offen: Browser-Test mit echtem Konto, Login-Alert neu (Edge Function, braucht SMTP), Google Fonts lokal |
 | 27 | EU-SMTP | Offen | Brevo/Mailjet als Custom SMTP in Supabase (Bestätigung, Reset, Login-Alert) |
 
 ## Infrastruktur
 | Bereich | Status | Details |
 |---|---|---|
-| PocketBase | 🔧 Lokal | Auth, Collections, Realtime, Hooks, Cron; Hosting offen |
+| Supabase | ✅ Live (Free) | Projekt `jbsucnkhtwxmohmaxdkc`, eu-west-1; Auth, Postgres, Realtime, pg_cron |
 | Firebase Hosting | ✅ Live | `https://pau-sa.web.app` (nur statisches Frontend) |
 | Vercel | ✅ Backup | Fallback-Deployment |
 
@@ -141,6 +144,6 @@ Im KontoTab editierbar. Privacy-Shield: IDs nur sichtbar per `socialVisible()` �
 | T3 | `isReady: false` beim Join — Unittest fehlt | Mittel |
 
 ## Behobene Bugs (Referenz)
-B1 UserProfile zeigte mockProfile · B2 GroupCard/Detail nutzten MOCK_CURRENT_USER · B3 ReadySystem.lobby nicht aktualisiert · B4 Cooldown-Countdown fehlte · B5 isVerified-Reset bei Reload · B6 Hero-Button im eingeloggten Zustand sichtbar · B7 Lobbys nur lokal (→ Firestore) — alle ✅ behoben
+B1 UserProfile zeigte mockProfile · B2 GroupCard/Detail nutzten MOCK_CURRENT_USER · B3 ReadySystem.lobby nicht aktualisiert · B4 Cooldown-Countdown fehlte · B5 isVerified-Reset bei Reload · B6 Hero-Button im eingeloggten Zustand sichtbar · B7 Lobbys nur lokal (→ DB) — alle ✅ behoben
 
 > Entfernt: ~~Matchmaking~~, ~~Tournaments~~, ~~DataBackup~~ (Sicherheitsrisiko)

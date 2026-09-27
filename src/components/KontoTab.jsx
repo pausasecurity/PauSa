@@ -3,9 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '../context/AuthContext'
 import { changeEmail, changePassword, deleteAccount, validatePassword, authError } from '../services/authService'
 import { loadProfile, saveProfile } from '../services/profileService'
-import { syncUserDoc } from '../services/userService'
-import { updateUsernameInLobby } from '../services/lobbyService'
-import { updateUsernameInFriendships } from '../services/friendService'
+import { saveUsername, saveSocialLinks } from '../services/userService'
+import { sanitizeUsername } from '../utils/sanitize'
 import { PLATFORM_META } from '../data/constants'
 import DoubleConfirm from './shared/DoubleConfirm'
 
@@ -177,16 +176,20 @@ export default function KontoTab() {
 
   // ── Handlers ──
 
-  const _doSavePlatforms = () => {
+  const _doSavePlatforms = async () => {
     setPlatformError(null)
-    const profile = loadProfile() ?? { userId: currentUser?.uid, username: currentUser?.displayName ?? '', favoriteGames: [], socialLinks: {} }
+    const profile = loadProfile() ?? { userId: currentUser?.userId, username: currentUser?.username ?? '', favoriteGames: [], socialLinks: {} }
     const newLinks = Object.fromEntries(
       Object.entries(platformIds).map(([k, v]) => [k, { id: v.trim() || null }])
     )
-    saveProfile({ ...profile, socialLinks: newLinks })
-    if (currentUser?.userId) {
-      syncUserDoc(currentUser.userId, profile.username ?? currentUser.username, newLinks).catch(() => {})
+    try {
+      await saveSocialLinks(currentUser.userId, newLinks)
+    } catch (e) {
+      setPlatformError(e.message)
+      setPlatformConfirm(false)
+      return
     }
+    saveProfile({ ...profile, socialLinks: newLinks })
     setPlatformConfirm(false)
     setPlatformSaved(true)
     safeTimeout(() => setPlatformSaved(false), 2000)
@@ -203,22 +206,25 @@ export default function KontoTab() {
     const trimmed = (newUsername ?? '').trim()
     if (trimmed.length < 3)  { setUsernameMsg('Mindestens 3 Zeichen.'); return }
     if (trimmed.length > 24) { setUsernameMsg('Maximal 24 Zeichen.'); return }
+    if (sanitizeUsername(trimmed) !== trimmed) { setUsernameMsg('Nur Buchstaben, Zahlen, _ und -.'); return }
     if (!canChange)          { setUsernameMsg(`Nächste Änderung möglich ab ${nextDate}.`); return }
     setPendingUsername(trimmed)
   }
 
-  const handleUsernameConfirmed = () => {
+  const handleUsernameConfirmed = async () => {
     if (!pendingUsername) return
     const trimmed = pendingUsername
+    try {
+      await saveUsername(currentUser.userId, trimmed)
+    } catch (e) {
+      setPendingUsername(null)
+      setUsernameMsg(e.message)
+      return
+    }
     const profile = loadProfile() ?? { userId: currentUser?.userId, favoriteGames: [], socialLinks: {} }
     saveProfile({ ...profile, username: trimmed })
     saveAccount({ ...account, usernameChanges: [...(account.usernameChanges ?? []), new Date().toISOString()] })
     updateUsername(trimmed)
-    if (currentUser?.userId) {
-      syncUserDoc(currentUser.userId, trimmed).catch(() => {})
-      updateUsernameInLobby(currentUser.userId, trimmed).catch(() => {})
-      updateUsernameInFriendships(currentUser.userId, trimmed).catch(() => {})
-    }
     setPendingUsername(null)
     setShowUsernameEdit(false)
     safeTimeout(() => setUsernameMsg('✓ Gespeichert'), 0)
@@ -233,7 +239,7 @@ export default function KontoTab() {
     try {
       await changeEmail(newEmail.trim(), currentPassword)
       setShowEmailEdit(false)
-      setEmailMsg('✓ Bestätigungslink an die neue E-Mail gesendet.')
+      setEmailMsg('✓ Bestätigungslinks an alte und neue E-Mail gesendet.')
       safeTimeout(() => setEmailMsg(null), 6000)
     } catch (e) {
       setEmailMsg(authError(e))

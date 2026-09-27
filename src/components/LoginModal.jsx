@@ -253,9 +253,10 @@ export default function LoginModal({ onClose, onSuccess, onRegister }) {
                 <label htmlFor="login-email" style={labelStyle}>{t('auth.email')}</label>
                 <input
                   id="login-email"
+                  name="email"
                   type="email"
                   autoFocus
-                  autoComplete="email"
+                  autoComplete="username"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder={t('auth.emailPlaceholder')}

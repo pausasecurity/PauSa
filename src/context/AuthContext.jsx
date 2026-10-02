@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
-import { loginWithEmail, logoutUser, onAuthChange } from '../services/authService'
+import { loginWithEmail, logoutUser, onAuthChange, consumeEmailLink } from '../services/authService'
 import { loadProfile, saveProfile } from '../services/profileService'
 import { getUserDoc } from '../services/userService'
 import PasswordResetModal from '../components/PasswordResetModal'
+import EmailLinkNotice from '../components/EmailLinkNotice'
 
 const AuthContext = createContext(null)
 
@@ -32,8 +33,10 @@ export function AuthProvider({ children }) {
   const [authReady,   setAuthReady]   = useState(false)
   const [recovery,    setRecovery]    = useState(false)
 
+  const [linkNotice,  setLinkNotice]  = useState(null) // Ergebnis eines Mail-Links (/auth/confirm)
+
   useEffect(() => {
-    return onAuthChange(async (authUser, event) => {
+    const unsubscribe = onAuthChange(async (authUser, event) => {
       if (event === 'PASSWORD_RECOVERY') setRecovery(true)
       if (authUser) {
         setCurrentUser(await resolveUser(authUser))
@@ -44,6 +47,9 @@ export function AuthProvider({ children }) {
       }
       setAuthReady(true)
     })
+    // Nach dem Abo einlösen, damit PASSWORD_RECOVERY/SIGNED_IN aus verifyOtp ankommen
+    consumeEmailLink().then(res => { if (res) setLinkNotice(res) })
+    return unsubscribe
   }, [])
 
   const login = async (email, password, rememberMe = true) => {
@@ -76,6 +82,7 @@ export function AuthProvider({ children }) {
     <AuthContext.Provider value={{ isLoggedIn, currentUser, login, logout, updateUsername }}>
       {children}
       {recovery && <PasswordResetModal onDone={() => setRecovery(false)} />}
+      {linkNotice && !recovery && <EmailLinkNotice {...linkNotice} onClose={() => setLinkNotice(null)} />}
     </AuthContext.Provider>
   )
 }

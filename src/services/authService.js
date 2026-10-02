@@ -45,6 +45,28 @@ export async function setNewPassword(password) {
   must(await supabase.auth.updateUser({ password }))
 }
 
+const EMAIL_LINK_TYPES = ['signup', 'recovery', 'email_change', 'email']
+
+// Links aus den Auth-Mails zeigen auf /auth/confirm?token_hash=…&type=… (eigene Domain statt supabase.co).
+// Erst der Klick in der App löst das Token ein → Link-Scanner der Mailanbieter verbrauchen es nicht.
+// Rückgabe: null (kein Mail-Link) | { type, error? }. Recovery löst PASSWORD_RECOVERY in onAuthChange aus.
+export async function consumeEmailLink() {
+  if (window.location.pathname !== '/auth/confirm') return null
+  const params = new URLSearchParams(window.location.search)
+  const tokenHash = params.get('token_hash')
+  const type      = params.get('type')
+  window.history.replaceState(null, '', '/')
+
+  if (!tokenHash || !EMAIL_LINK_TYPES.includes(type)) return { type, error: 'Ungültiger Link.' }
+  const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type })
+  if (error) {
+    console.error('[Auth] Mail-Link', error)
+    const expired = error.code === 'otp_expired' || error.status === 403
+    return { type, error: expired ? 'Der Link ist abgelaufen oder wurde schon benutzt.' : authError(error) }
+  }
+  return { type }
+}
+
 // cb(user|null, event) — feuert initial und danach nur bei User-Wechsel oder Passwort-Recovery.
 // setTimeout: Supabase-Aufrufe direkt im Auth-Callback können blockieren.
 export function onAuthChange(cb) {

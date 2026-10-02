@@ -195,7 +195,8 @@ password_requirements = "lower_upper_letters_digits_symbols"
 
 [auth.rate_limit]
 # Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
-email_sent = 2
+# Brevo Free: 300 Mails/Tag → 30/h lässt Puffer
+email_sent = 30
 # Number of SMS messages that can be sent per hour. Requires auth.sms to be enabled.
 sms_sent = 30
 # Number of anonymous sign-ins that can be made per hour per IP address. Requires enable_anonymous_sign_ins = true.
@@ -233,14 +234,28 @@ otp_length = 8
 otp_expiry = 3600
 
 # Use a production-ready SMTP server
-# [auth.email.smtp]
-# enabled = true
-# host = "smtp.sendgrid.net"
-# port = 587
-# user = "apikey"
-# pass = "env(SENDGRID_API_KEY)"
-# admin_email = "admin@email.com"
-# sender_name = "Admin"
+# Brevo (EU) als Custom SMTP – Schlüssel steht in supabase/.env (nicht im Repo)
+[auth.email.smtp]
+enabled = true
+host = "smtp-relay.brevo.com"
+port = 587
+user = "bb665c001@smtp-brevo.com"
+pass = "env(SMTP_PASS)"
+admin_email = "noreply@pau-sa.de"
+sender_name = "PauSa"
+
+# Deutsche Vorlagen; Links führen auf die eigene Domain (/auth/confirm → verifyOtp in authService)
+[auth.email.template.confirmation]
+subject = "Bestätige deine E-Mail-Adresse für PauSa"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "Dein PauSa-Passwort zurücksetzen"
+content_path = "./supabase/templates/recovery.html"
+
+[auth.email.template.email_change]
+subject = "Bestätige die Änderung deiner E-Mail-Adresse"
+content_path = "./supabase/templates/email_change.html"
 
 # Uncomment to customize email template
 # [auth.email.template.invite]

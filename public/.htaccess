@@ -3,6 +3,24 @@
 Options -Indexes
 DirectoryIndex index.html
 
+# --- TESTPHASE: Passwortschutz (vor öffentlichem Start entfernen) ---
+# .htpasswd wird in konsoleH verwaltet (Serverkonfiguration → Verzeichnisschutz), nicht im Repo.
+# Unverschlüsselte HTTP-Anfragen ohne Login zulassen, damit sie erst auf HTTPS umgeleitet werden
+# und das Passwort nie im Klartext übertragen wird.
+AuthUserFile "/usr/www/users/e2twcy/.htpasswd"
+AuthName "PauSa Security"
+AuthType Basic
+<RequireAny>
+  Require expr "%{HTTPS} != 'on' && %{HTTP:X-Forwarded-Proto} != 'https'"
+  Require valid-user
+</RequireAny>
+# --- /TESTPHASE ---
+
+# .htaccess/.htpasswd nie ausliefern
+<FilesMatch "^\.ht">
+  Require all denied
+</FilesMatch>
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
 
